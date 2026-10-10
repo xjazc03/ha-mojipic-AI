@@ -1,0 +1,120 @@
+display_image:
+  name: Display image
+  description: >-
+    Push an image to a MojiPic. The image is resized to fit 32x32 and displayed
+    immediately. Uploading takes a few seconds.
+  fields:
+    image:
+      name: Image
+      description: The image to display.
+      required: false
+      selector:
+        image:
+    path:
+      name: Path
+      description: >-
+        Path to an image inside the Home Assistant config directory,
+        for example mojipic_images/doorbell.png.
+      required: false
+      selector:
+        text:
+    url:
+      name: URL
+      description: URL of an image to download and display.
+      required: false
+      selector:
+        text:
+    slot:
+      name: Slot
+      description: Image slot to write (0-4095).
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 4095
+          mode: box
+    address:
+      name: Device
+      description: Which MojiPic to target. Only needed if you have more than one.
+      required: false
+      selector:
+        text:
+    brightness:
+      name: Brightness
+      description: Set brightness (0-100) before displaying.
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 100
+          mode: slider
+
+set_brightness:
+  name: Set brightness
+  description: Set the MojiPic brightness.
+  fields:
+    brightness:
+      name: Brightness
+      description: Brightness percentage.
+      required: true
+      default: 50
+      selector:
+        number:
+          min: 0
+          max: 100
+          mode: slider
+    address:
+      name: Device
+      required: false
+      selector:
+        text:
+
+device_on:
+  name: Power on
+  description: Turn the MojiPic on.
+  fields:
+    address:
+      name: Device
+      required: false
+      selector:
+        text:
+
+device_off:
+  name: Power off
+  description: Turn the MojiPic off.
+  fields:
+    address:
+      name: Device
+      required: false
+      selector:
+        text:
+
+screen_on:
+  name: Screen on
+  description: Wake the panel.
+  fields:
+    address:
+      name: Device
+      required: false
+      selector:
+        text:
+
+screen_off:
+  name: Screen off
+  description: Blank the panel.
+  fields:
+    address:
+      name: Device
+      required: false
+      selector:
+        text:
+
+clear_screen:
+  name: Clear screen
+  description: Clear the panel to black.
+  fields:
+    address:
+      name: Device
+      required: false
+      selector:
+        text:
