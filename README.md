@@ -289,4 +289,9 @@ You are welcome to try it, report what breaks, and contribute fixes.
 
 Unofficial integration. No affiliation with or endorsement from the device manufacturer.
 
+The integration icon (`custom_components/mojipic/brand/`) is MojiPic's own favicon,
+taken from [mojipic.co](https://mojipic.co/), and belongs to its manufacturer. It is
+included so users can tell at a glance which device this integration is for. The 2x
+variant is a nearest-neighbour scale of the original — pixel art, so no smoothing.
+
 MIT licensed.

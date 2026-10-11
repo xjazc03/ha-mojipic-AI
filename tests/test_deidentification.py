@@ -263,3 +263,66 @@ class TestRepositoryStructure(unittest.TestCase):
             json.loads((REPO_ROOT / "hacs.json").read_text()),
             ".hacs.json and hacs.json must not disagree",
         )
+
+
+class TestBrandAssets(unittest.TestCase):
+    """HACS requires brand assets for an integration.
+
+    From the HACS publish docs: "You must provide brand assets for your
+    integration. You can do this by adding a brand directory in your
+    repository with at least an icon.png file."
+
+    Without it, HACS renders a generic placeholder. Cheap to satisfy and
+    easy to forget.
+    """
+
+    BRAND = REPO_ROOT / "custom_components" / "mojipic" / "brand"
+
+    def test_brand_directory_exists(self):
+        self.assertTrue(
+            self.BRAND.is_dir(),
+            "custom_components/mojipic/brand/ must exist; HACS requires brand assets",
+        )
+
+    def test_icon_png_exists_and_is_a_png(self):
+        icon = self.BRAND / "icon.png"
+        self.assertTrue(icon.is_file(), "brand/icon.png is required by HACS")
+        self.assertEqual(icon.read_bytes()[:8], b"\x89PNG\r\n\x1a\n",
+                         "brand/icon.png must be a real PNG")
+
+    def test_icon_has_transparency(self):
+        """A flat opaque rectangle looks broken on the Lovelace background."""
+        from PIL import Image
+
+        icon = self.BRAND / "icon.png"
+        alpha = Image.open(icon).convert("RGBA").getchannel("A")
+        lo, _hi = alpha.getextrema()
+        self.assertLess(lo, 255, "icon should have transparent pixels")
+
+    def test_optional_2x_icon_is_larger(self):
+        """@2x is for high-DPI displays; if present it must actually be 2x."""
+        from PIL import Image
+
+        two_x = self.BRAND / "icon@2x.png"
+        if not two_x.is_file():
+            self.skipTest("icon@2x.png not present (optional)")
+        one = Image.open(self.BRAND / "icon.png").size
+        two = Image.open(two_x).size
+        self.assertEqual(two[0], one[0] * 2,
+                         f"icon@2x.png is {two}, expected 2x of {one}")
+
+    def test_pixel_art_upscaled_without_smoothing(self):
+        """A smoothing filter would blur the artwork's deliberate hard edges."""
+        from PIL import Image
+
+        two_x = self.BRAND / "icon@2x.png"
+        if not two_x.is_file():
+            self.skipTest("icon@2x.png not present (optional)")
+        im = Image.open(two_x).convert("RGBA")
+        small = im.resize((im.width // 2, im.height // 2), Image.NEAREST)
+        upscaled = small.resize((im.width, im.height), Image.NEAREST)
+        self.assertEqual(
+            im.tobytes(), upscaled.tobytes(),
+            "icon@2x.png must be a NEAREST-neighbour 2x of icon.png, not a "
+            "smoothed or independently-drawn image",
+        )
