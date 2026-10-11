@@ -16,9 +16,30 @@ from typing import Any
 
 import voluptuous as vol
 from homeassistant import config_entries
-from homeassistant.config_entries import ConfigFlowResult
 from homeassistant.core import callback
 from homeassistant.helpers import selector
+
+# Version-fragile imports, guarded deliberately.
+#
+# `ConfigFlowResult` only exists on newer Home Assistant, and the repair flow
+# class has been renamed between versions. Importing either unguarded means a
+# version skew turns into "Config flow could not be loaded: 500" -- a failure
+# that looks like a server problem and tells the user nothing. Degrade
+# gracefully instead: the annotations are hints, not runtime requirements.
+try:  # Home Assistant >= 2024.4
+    from homeassistant.config_entries import ConfigFlowResult
+except ImportError:  # pragma: no cover - older cores
+    ConfigFlowResult = Any  # type: ignore[misc, assignment]
+
+try:  # renamed from RepairsFlow on newer cores
+    _RepairFlowBase = config_entries.RepairFlow
+except AttributeError:  # pragma: no cover - older cores
+    try:
+        _RepairFlowBase = config_entries.RepairsFlow
+    except AttributeError:
+        # Neither name exists. The repair flow is a convenience, so degrade to
+        # a plain object rather than taking the config flow down with it.
+        _RepairFlowBase = object
 
 from .const import (
     CONF_ADDRESS,
@@ -186,7 +207,7 @@ class MojipicOptionsFlow(config_entries.OptionsFlow):
         )
 
 
-class MojipicRepairFlow(config_entries.RepairFlow):
+class MojipicRepairFlow(_RepairFlowBase):
     """Recover a display that has stopped responding, without re-adding it."""
 
     async def async_step_init(

@@ -14,11 +14,9 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 
 from .const import (
@@ -54,7 +52,6 @@ _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = ["image", "select", "sensor"]
 
-type MojipicConfigEntry = ConfigEntry
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
