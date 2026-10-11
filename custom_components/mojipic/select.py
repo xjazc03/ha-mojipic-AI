@@ -254,13 +254,20 @@ class MojipicImageSelect(SelectEntity):
             for x in range(size):
                 if (x // 4 + y // 4) % 2 == 0:
                     pixels[x, y] = (255, 255, 255)
-        framebuffer = encode_framebuffer(img, enhance_image=False)
+        # Store as a real image entry so the slot is valid and the image
+        # appears in the dropdown. The manager assigns the next free id.
+        import io
+        raw = io.BytesIO()
+        img.save(raw, format="PNG")
+        stored = await self.manager.async_upload(raw.getvalue(), "test_pattern.png")
+        framebuffer = await self.manager.async_framebuffer(stored["id"])
         result = await self.coordinator.async_display(
-            framebuffer, 9999  # reserved test-pattern slot, out of user range
+            framebuffer, stored["id"]
         )
         if result.outcome.ok:
             self._current = TEST_PATTERN_OPTION
             self.async_write_ha_state()
+            await self.manager.async_save()
 
     async def _async_open_url_flow(self) -> None:
         """Download from any user-provided URL via config file."""
