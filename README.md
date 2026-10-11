@@ -28,6 +28,9 @@ The point is **event → image**. The rest is supporting cast.
 ## Requirements
 
 - Home Assistant **2024.10.0** or newer
+- Python **3.11+** (the integration depends on Pillow, which ships compiled
+  wheels; it declares `Pillow>=11` rather than an exact pin so that pip can pick
+  a build matching your interpreter)
 - A MojiPic, powered on and within Bluetooth range (~10 m)
 - **A Bluetooth adapter Home Assistant can reach:**
   - a local adapter on the HA host
@@ -226,6 +229,16 @@ automation:
   the device address and reconnects on that basis. If a firmware update or a battery
   event changes the address, use `mojipic.rescan` or the repair flow — it finds the
   display again and re-persists the address.
+
+### A known trap this project already fell into
+
+An earlier release pinned `Pillow==10.4.0`. That version has no Python 3.14 wheel, so
+pip tried to build it from source, failed, and Home Assistant refused to load the
+integration at all — surfacing as the unhelpful *"Config flow could not be loaded: 500"*.
+
+The pin is gone, and there is now a test that fails the build if an interpreter-sensitive
+dependency is ever exact-pinned again. The general rule, if you fork this: **do not exact-pin
+a dependency that ships compiled wheels.** Use a floor and let pip resolve.
 
 ---
 
