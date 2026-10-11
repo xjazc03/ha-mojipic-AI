@@ -256,7 +256,7 @@ class MojipicImageSelect(SelectEntity):
                     pixels[x, y] = (255, 255, 255)
         framebuffer = encode_framebuffer(img, enhance_image=False)
         result = await self.coordinator.async_display(
-            framebuffer, -1  # -1 = test pattern slot
+            framebuffer, 9999  # reserved test-pattern slot, out of user range
         )
         if result.outcome.ok:
             self._current = TEST_PATTERN_OPTION
