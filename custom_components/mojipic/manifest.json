@@ -19,5 +19,5 @@
     "Pillow>=11",
     "bleak-retry-connector>=3.7"
   ],
-  "version": "1.0.4"
+  "version": "1.0.5"
 }

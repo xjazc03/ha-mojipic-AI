@@ -99,15 +99,35 @@ class TestHomeAssistantApiUsage(unittest.TestCase):
             "a BLEDevice is not a client and must not be assigned as one",
         )
 
-    def test_discovery_awaits_the_shared_scanner(self):
+    def test_discovery_uses_the_manager_not_the_shared_scanner(self):
+        """Discovery must consume the manager's advertisement stream.
+
+        It must NOT call discover() on HA's shared scanner: HA already runs a
+        scanner continuously, so that returns immediately with whatever is
+        cached -- normally nothing -- and the form fails instantly with "No
+        MojiPic found" without ever listening. Found on a real host.
+        """
         source = self._source("transport")
         self.assertIn(
-            "await scanner.discover(",
+            "async_discovered_service_info",
             source,
-            "discovery must await the shared scanner's discover()",
+            "check devices Home Assistant already knows before waiting",
         )
         self.assertIn(
-            "async_get_scanner", source, "must use HA's shared scanner"
+            "async_register_callback",
+            source,
+            "subscribe to the advertisement stream for the scan window",
+        )
+        self.assertNotIn(
+            "await scanner.discover(",
+            source,
+            "do not call discover() on HA's shared scanner; it is already "
+            "running and returns immediately with nothing cached",
+        )
+        self.assertNotIn(
+            "async_get_scanner(",
+            source,
+            "discovery no longer needs the shared scanner wrapper",
         )
 
     def test_manifest_depends_on_bluetooth_adapters(self):

@@ -2,14 +2,16 @@
 
 Follows Home Assistant's documented pattern for Bluetooth integrations:
 
-  * Discover with ``bluetooth.async_get_scanner(hass)``, which returns the
-    shared ``BleakScanner`` wrapper. This avoids starting a second scanner and
-    keeps working when the user changes adapter settings.
-  * Connect with ``BleakClient`` over the ``BLEDevice`` that scanner returned,
+  * Discover through Home Assistant's Bluetooth *manager* -- check what it
+    already knows, then subscribe to its advertisement stream. Calling
+    ``discover()`` on the shared scanner does not work: HA already runs a
+    scanner, so it returns immediately with nothing cached.
+  * Connect with ``BleakClient`` over the ``BLEDevice`` that manager resolved,
     so the connection is routed back through whichever adapter or ESPHome
     Bluetooth proxy actually saw the device.
-  * Use a connection timeout of at least 10 seconds: BlueZ must resolve
-    services on first contact, and transient failures are normal.
+  * Use ``bleak_retry_connector.establish_connection`` and a connection
+    timeout of at least 10 seconds: BlueZ must resolve services on first
+    contact, and transient failures are normal.
   * Do not reuse a ``BleakClient`` across connections; a fresh one per
     operation is more reliable.
 
@@ -17,18 +19,22 @@ Follows Home Assistant's documented pattern for Bluetooth integrations:
 instance. It is written against the documented API and reviewed against the
 Home Assistant source, but only a live host can confirm it.
 
-Three API errors were found here after the first live attempt, all of the same
-kind -- a signature assumed rather than read:
+Four API errors were found here after live attempts, all the same kind -- a
+signature or behaviour assumed rather than read:
 
   * ``bluetooth.async_scanner_count(hass, connectable)`` takes ``hass``; it was
     being called with no arguments, raising ``TypeError`` and surfacing as
     "Unknown error occurred" when the scan form was submitted.
   * ``bluetooth.async_register_callback(hass, callback, match_dict, mode)`` has
     ``match_dict`` as its third positional argument; the scanning mode was being
-    passed into that slot.
+    passed into that slot, silently disabling the subscription.
   * ``bluetooth.async_ble_device_from_address(hass, address)`` is synchronous and
     returns a ``BLEDevice``, not a connected client. It was being awaited and
     treated as a client with ``write_gatt_char``.
+  * ``BleakScanner.discover()`` on HA's shared scanner returns immediately with
+    whatever is cached -- almost always nothing -- because HA is already
+    scanning. The form failed instantly with "No MojiPic found" without ever
+    listening. Discovery must consume the manager's advertisement stream.
 """
 
 from __future__ import annotations
@@ -112,49 +118,110 @@ class HomeAssistantBluetoothTransport(MojipicTransport):
         self._ble_device = None
 
     # -- helpers ------------------------------------------------------------
-    def _scanner(self):
-        """The shared Home Assistant BleakScanner wrapper."""
-        from homeassistant.components import bluetooth
-
-        return bluetooth.async_get_scanner(self.hass)
-
     def _bluetooth(self):
         from homeassistant.components import bluetooth
 
         return bluetooth
 
-    @staticmethod
-    def _advertised_name(device, advertisement_data) -> str:
-        return (
-            advertisement_data.local_name
-            or getattr(device, "name", None)
-            or ""
-        ).strip()
-
     # -- discovery ----------------------------------------------------------
     async def async_discover(
         self, name_prefix: str, timeout: int
     ) -> Optional[str]:
-        """Scan using Home Assistant's shared scanner."""
+        """Find a MojiPic using Home Assistant's Bluetooth manager.
+
+        Two things are wrong with simply calling `discover()` on the shared
+        scanner, and both were found the hard way:
+
+        1. Home Assistant already runs a scanner continuously. Asking a
+           running bleak scanner to `discover()` returns immediately with
+           whatever it happens to have cached -- usually nothing. The scan
+           appears to be skipped and the setup form fails instantly with
+           "No MojiPic found".
+
+        2. `discover()` gives no access to advertisements that arrived before
+           the call.
+
+        So instead: check what Home Assistant already knows, then subscribe to
+        its advertisement stream and wait for a match. This is the documented
+        callback pattern and it works with whatever adapter or ESPHome proxy
+        the user has.
+        """
         prefix = (name_prefix or "").strip().lower()
+        if not prefix:
+            return None
 
         try:
-            scanner = self._scanner()
-        except Exception as err:  # noqa: BLE001
+            bluetooth = self._bluetooth()
+        except ImportError as err:  # pragma: no cover
             raise TransportError(f"bluetooth is unavailable: {err}") from err
 
+        found: dict[str, str] = {}
+        loop = asyncio.get_running_loop()
+
+        def _consider(address: Optional[str], *names: Optional[str]) -> None:
+            if not address:
+                return
+            for name in names:
+                if name and name.strip().lower().startswith(prefix):
+                    found.setdefault(address.upper(), name.strip())
+                    return
+
+        # 1. Anything Home Assistant has already seen. A device that
+        #    advertised before the form was submitted is here, and waiting
+        #    again for it would waste the whole timeout.
         try:
-            devices = await scanner.discover(timeout=timeout, return_adv=True)
+            for info in bluetooth.async_discovered_service_info(
+                self.hass, connectable=True
+            ):
+                _consider(
+                    getattr(info, "address", None),
+                    getattr(info, "name", None),
+                    getattr(getattr(info, "advertisement", None), "local_name", None),
+                )
         except Exception as err:  # noqa: BLE001
-            raise TransportError(f"bluetooth scan failed: {err}") from err
+            _LOGGER.debug("Could not read known bluetooth services: %s", err)
 
-        for address, (device, advertisement_data) in (devices or {}).items():
-            if self._advertised_name(device, advertisement_data).lower().startswith(prefix):
-                _LOGGER.debug("Discovered MojiPic at %s", address)
-                self._address = address.upper()
-                return address.upper()
+        if found:
+            address = next(iter(found))
+            _LOGGER.debug("Discovered MojiPic (cached) at %s", address)
+            self._address = address
+            return address
 
-        return None
+        # 2. Subscribe to advertisements for the remainder of the window.
+        def _on_service_info(service_info) -> None:
+            _consider(
+                getattr(service_info, "address", None),
+                getattr(service_info, "name", None),
+                getattr(getattr(service_info, "advertisement", None), "local_name", None),
+            )
+
+        try:
+            # match_dict and mode are positional-or-keyword, in that order.
+            # Passing the mode third binds it to match_dict instead, which
+            # silently disables the subscription.
+            cancel = bluetooth.async_register_callback(
+                self.hass,
+                _on_service_info,
+                None,
+                bluetooth.BluetoothScanningMode.ACTIVE,
+            )
+        except Exception as err:  # noqa: BLE001
+            raise TransportError(f"could not watch for advertisements: {err}") from err
+
+        try:
+            deadline = loop.time() + timeout
+            while loop.time() < deadline and not found:
+                await asyncio.sleep(0.25)
+        finally:
+            cancel()
+
+        if not found:
+            return None
+
+        address = next(iter(found))
+        _LOGGER.debug("Discovered MojiPic at %s (%s)", address, found[address])
+        self._address = address
+        return address
 
     # -- connection ---------------------------------------------------------
     async def async_connect(self, address: str) -> None:
