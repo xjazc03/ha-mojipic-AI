@@ -222,8 +222,44 @@ class TestRepositoryStructure(unittest.TestCase):
         self.assertEqual(manifest["domain"], "mojipic")
 
     def test_hacs_json_present_and_parses(self):
+        """`hacs.json` -- no leading dot -- is the file HACS actually reads.
+
+        HACS resolves this name from `RepositoryFile.HACS_JSON = "hacs.json"`
+        in hacs/enums.py, and fetches it by that exact path. A file named
+        `.hacs.json` is invisible to it.
+
+        With the dotted name, HACS never loads the repository manifest, then
+        fails at download time with the misleading "The version v1.0.1 for
+        this integration can not be used with HACS" -- because it looked up
+        `hacs.json` at that tag, got nothing, and could not proceed.
+
+        This was a real bug in v1.0.0 and v1.0.1.
+        """
         import json
 
-        hacs = json.loads((REPO_ROOT / ".hacs.json").read_text())
+        hacs_path = REPO_ROOT / "hacs.json"
+        self.assertTrue(
+            hacs_path.is_file(),
+            "hacs.json (no leading dot) must exist at the repository root; "
+            "HACS fetches this exact filename and ignores .hacs.json",
+        )
+        hacs = json.loads(hacs_path.read_text())
         for key in ("name", "render_readme", "content_in_root", "homeassistant"):
-            self.assertIn(key, hacs, f".hacs.json is missing {key!r}")
+            self.assertIn(key, hacs, f"hacs.json is missing {key!r}")
+
+    def test_dotted_hacs_json_is_identical_when_present(self):
+        """.hacs.json is kept only for older HACS versions that expect it.
+
+        If both are present they must agree, otherwise the two supported
+        versions of HACS would disagree about how this repository installs.
+        """
+        import json
+
+        dotted = REPO_ROOT / ".hacs.json"
+        if not dotted.is_file():
+            self.skipTest(".hacs.json not present (hacs.json alone is fine)")
+        self.assertEqual(
+            json.loads(dotted.read_text()),
+            json.loads((REPO_ROOT / "hacs.json").read_text()),
+            ".hacs.json and hacs.json must not disagree",
+        )
