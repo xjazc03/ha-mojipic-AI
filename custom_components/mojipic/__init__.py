@@ -12,6 +12,7 @@ in the config entry and reused, which is reported as "configured" rather than
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 from pathlib import Path
 
@@ -54,6 +55,19 @@ _LOGGER = logging.getLogger(__name__)
 PLATFORMS = ["image", "select", "sensor"]
 
 
+def _loaded_version() -> str:
+    """Read the version from the manifest next to this file.
+
+    Deliberately read at runtime rather than imported, so the log reflects what
+    is on disk in the running installation.
+    """
+    try:
+        manifest = Path(__file__).parent / "manifest.json"
+        return json.loads(manifest.read_text()).get("version", "?")
+    except Exception:  # noqa: BLE001 - diagnostics must never break setup
+        return "?"
+
+
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Register services. Runs once, on the first config entry setup."""
@@ -68,6 +82,18 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up MojiPic from a config entry."""
+    # Always announce which version actually loaded. A stale tree is otherwise
+    # invisible: Home Assistant reads the files once at boot, so editing them
+    # afterwards changes nothing until a restart, and the only symptom is a
+    # traceback pointing at line numbers that no longer match the file on
+    # disk. That ambiguity cost several hours of debugging a fix that was
+    # already present and correct.
+    _LOGGER.info(
+        "MojiPic %s loading (entry %s, address %s)",
+        _loaded_version(), entry.entry_id,
+        entry.data.get("address", "?"),
+    )
+
     transport = default_transport(hass)
 
     coordinator = MojipicCoordinator(

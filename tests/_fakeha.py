@@ -251,7 +251,15 @@ def install(monkey_state=None):
         callback=lambda f: f,
         BluetoothScanningMode=types.SimpleNamespace(ACTIVE=1, PASSIVE=0),
         async_register_callback=lambda *a, **k: (lambda: None))
-    mod("homeassistant.config_validation", string=str)
+    # Must be registered under helpers.* -- config_flow does
+    # `from homeassistant.helpers import config_validation as cv`.
+    mod("homeassistant.helpers.config_validation", string=str)
+    mod("homeassistant.util")
+    mod("homeassistant.util.threading",
+        HassJob=types.SimpleNamespace(
+            target=lambda f: f,
+            executor=lambda f: f,
+        ))
 
     try:
         import voluptuous  # noqa: F401

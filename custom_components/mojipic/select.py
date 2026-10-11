@@ -103,6 +103,8 @@ class MojipicImageSelect(SelectEntity):
     @callback
     def _handle_images_changed(self, *_args) -> None:
         """Re-read the stored list when the upload flow adds an image."""
+        if self.hass is None:
+            return
         self.hass.async_create_task(self.async_refresh_options())
 
     async def async_refresh_options(self, write_state: bool = True) -> None:

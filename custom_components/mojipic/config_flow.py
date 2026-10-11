@@ -228,7 +228,24 @@ class MojipicConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         bundle = self.hass.data.get(DOMAIN, {}).get(entry.entry_id)
         if bundle is None:
             # The entry is not loaded, so there is no coordinator to push with.
-            # Storing the image still works, so report it rather than failing.
+            #
+            # This abort is invisible: Home Assistant dismisses an abort dialog
+            # immediately, so from the user's side clicking "Upload image..."
+            # does absolutely nothing and there is no trace in the log. That
+            # is exactly how a setup failure went unnoticed for several
+            # releases -- the symptom was "the upload button does nothing" with
+            # no error anywhere.
+            #
+            # Log it loudly enough to be findable. The bundle is only missing
+            # when async_setup_entry raised, so the real fix is always
+            # elsewhere; this line just points at it.
+            _LOGGER.error(
+                "MojiPic upload form cannot open for entry %s: the integration "
+                "is not loaded, so hass.data[%r] is empty. This means "
+                "async_setup_entry failed -- check the log above for the "
+                "setup error, then reload the integration.",
+                entry.entry_id, DOMAIN,
+            )
             return self.async_abort(reason="reload_required")
 
         if user_input is not None:

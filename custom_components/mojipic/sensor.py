@@ -52,11 +52,23 @@ class MojipicBattery(SensorEntity):
         )
 
     def _handle_update(self) -> None:
-        # Guard: see image.py. Writing state before the entity platform has
-        # assigned `hass` raises and repeats on every signal.
+        # Two guards, both learned the hard way.
+        #
+        # `hass` is assigned by the entity platform after construction, so a
+        # signal can arrive before it exists; writing then raises
+        # "AttributeError: Attribute hass is None for <entity unknown>".
+        #
+        # `schedule_update_ha_state` rather than `async_write_ha_state` because
+        # a dispatcher signal can arrive from an executor thread, and writing
+        # state off the event loop raises
+        #   RuntimeError: Detected that custom integration 'mojipic' calls
+        #                 async_write_ha_state from a thread other than the
+        #                 event loop
+        # which then repeats on every signal. The scheduled variant is the
+        # documented thread-safe form.
         if self.hass is None:
             return
-        self.async_write_ha_state()
+        self.schedule_update_ha_state()
 
     @property
     def native_value(self) -> int | None:
