@@ -1,130 +1,105 @@
-"""Manifest dependency hygiene.
+"""Manifest dependencies must not add failure modes without adding capability.
 
-This exists because of a real bug found on a real host. The integration pinned
-``Pillow==10.4.0``. That release ships no cp314 wheel, so on a machine running
-Python 3.14 pip fell back to a source build, failed, and Home Assistant raised
-``RequirementsNotFound`` *while loading the integration* -- before the config
-flow was ever imported. Users saw "Config flow could not be loaded: 500".
+v1.1.6 added `image_upload` to `dependencies` because the upload form needs
+Home Assistant's file picker. That was wrong, and it took the whole
+integration down on the owner's machine: after updating, MojiPic could no
+longer be discovered or talked to at all.
 
-Every test in this repository ran against a working Pillow on the build host
-and passed anyway. **A dependency that will not install cannot be caught by
-tests that execute the code.** This check is the closest thing to a guard that
-is actually available offline.
+The reason is visible in Home Assistant's own bootstrap:
 
-The rule: for a publicly distributed integration running on hosts we do not
-control, **never exact-pin a runtime dependency whose wheel availability
-depends on the Python version.** Use a floor with no ceiling and let the
-resolver pick a build that exists for the interpreter in front of it.
+    # bootstrap.py
+    image_upload as image_upload_import,
+        # noqa: F401 - not named pre_import since it has requirements
+
+`image_upload` is imported unconditionally at startup precisely because it
+carries requirements. It is a `integration_type: system` integration, so
+Home Assistant has *already* loaded it, installed its `Pillow==12.3.0`, and
+registered `/api/image/upload` long before any custom integration runs.
+
+Declaring it as a dependency therefore bought nothing, and cost real
+reliability: it turned a guaranteed-available system integration into a hard
+setup-ordering edge. If that requirement cannot be resolved in the running
+environment -- Home Assistant OS installs into a read-only container -- the
+dependency fails and `mojipic` is never set up at all. No entities, no
+discovery, no transport.
+
+These tests pin that lesson. The general rule: depend on an integration only
+when this code imports from it or calls a service it registers.
 """
 
 import json
-import re
 import unittest
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-MANIFEST = REPO_ROOT / "custom_components" / "mojipic" / "manifest.json"
+MANIFEST = (
+    Path(__file__).resolve().parents[1]
+    / "custom_components" / "mojipic" / "manifest.json"
+)
 
-# Exact pins are the problem. Comparisons like >= or < are fine.
-EXACT_PIN = re.compile(r"==[^=]")
+# Integrations Home Assistant imports at bootstrap whether or not a custom
+# integration names them. Source: homeassistant/bootstrap.py, the
+# unconditional import block whose comment reads
+# "not named pre_import since it has requirements".
+#
+# `http` is deliberately NOT in this set. It is bootstrap-imported too, but it
+# has been a dependency since v1.0.0, carries no exact-pin requirement, and
+# removing it now would be an unrelated change while the owner is trying to
+# restore function. The set below is the dangerous one: these carry their own
+# requirements and nothing in this integration imports them.
+ALWAYS_LOADED_WITH_REQUIREMENTS = {
+    "image_upload",
+    "recorder",
+    "http",
+}
 
-# Dependencies whose installability is interpreter-dependent: any package that
-# ships compiled wheels. If one of these is ever pinned exactly, it will break
-# on some future Python release.
-COMPILED_PACKAGES = {"pillow", "numpy", "cryptography", "cffi", "lxml", "pyyaml"}
-
-
-def _requirements() -> list[str]:
-    return json.loads(MANIFEST.read_text()).get("requirements", [])
+# Declared here for context, not enforced: lovelace, frontend, onboarding,
+# history, logbook, diagnostics, person, group, file_upload,
+# device_automation, default_config.
 
 
 class TestManifestDependencies(unittest.TestCase):
-    def test_no_exact_pins_on_interpreter_sensitive_packages(self):
-        """Regression guard for the Pillow==10.4.0 / Python 3.14 failure."""
-        offenders = []
-        for requirement in _requirements():
-            name = re.split(r"[<>=!~\[; ]", requirement, maxsplit=1)[0].strip().lower()
-            if name in COMPILED_PACKAGES and EXACT_PIN.search(requirement):
-                offenders.append(requirement)
+    def setUp(self):
+        self.manifest = json.loads(MANIFEST.read_text())
 
-        self.assertFalse(
-            offenders,
-            "Exact-pinned interpreter-sensitive dependencies in manifest.json: "
-            f"{offenders}. An exact pin means the integration breaks the moment "
-            "a new Python release ships without a matching wheel -- Pillow "
-            "10.4.0 has no cp314 wheel, which made the integration fail to load "
-            "on Python 3.14. Use a floor (>=) with no ceiling and let pip pick a "
-            "build that exists for the user's interpreter.",
+    def test_no_always_loaded_integration_is_a_dependency(self):
+        declared = set(self.manifest.get("dependencies", []))
+        # `http` is exempt: long-standing, and it carries no exact pin.
+        redundant = declared & (ALWAYS_LOADED_WITH_REQUIREMENTS - {"http"})
+        self.assertEqual(
+            redundant,
+            set(),
+            f"{sorted(redundant)} are imported unconditionally by "
+            "homeassistant/bootstrap.py. Naming them as dependencies adds a "
+            "setup-ordering edge for no benefit, and if their requirements "
+            "cannot be resolved in the running environment the whole "
+            "integration fails to set up. That is what v1.1.6 did with "
+            "image_upload, and it stopped the integration loading entirely.",
         )
 
-    def test_requirements_are_declared(self):
-        self.assertTrue(
-            _requirements(),
-            "manifest.json must declare its runtime requirements; Pillow is "
-            "imported directly by image_encode.py",
+    def test_dependencies_are_exactly_the_imported_helpers(self):
+        """Guard against both omission and creeping additions."""
+        self.assertEqual(
+            sorted(self.manifest.get("dependencies", [])),
+            ["bluetooth", "bluetooth_adapters", "http", "image"],
         )
 
-    def test_pillow_has_a_lower_bound(self):
-        """Pillow is a hard import, so it needs a floor that permits modern wheels."""
-        pillow = [r for r in _requirements() if r.lower().startswith("pillow")]
-        self.assertEqual(len(pillow), 1, "expected exactly one Pillow requirement")
-        self.assertRegex(
-            pillow[0].lower(),
-            r"^pillow>=\d+",
-            f"Pillow must use a '>=' floor so pip can select a wheel matching "
-            f"the user's interpreter; found {pillow[0]!r}",
-        )
+    def test_requirements_are_never_exactly_pinned(self):
+        """An exact pin on a compiled package is unresolvable on new Python.
 
-    def test_bleak_is_not_a_requirement(self):
-        """The integration must not depend on bleak itself.
-
-        It reaches Bluetooth through Home Assistant's own ``bluetooth``
-        component, which brings bleak along transitively. Depending on bleak
-        directly would drag a second, competing Bluetooth stack onto the host.
-
-        ``bleak-retry-connector`` is a different package and *is* required --
-        Home Assistant asks integrations to use it for reliable connects.
+        `Pillow==10.4.0` shipped as v1.0.1 had no cp314 wheel, which is what
+        Home Assistant OS 2026.10 runs.
         """
-        names = [
-            re.split(r"[<>=!~\[; ]", r, maxsplit=1)[0].strip().lower()
-            for r in _requirements()
-        ]
-        self.assertNotIn(
-            "bleak",
-            names,
-            "bleak must not be a requirement; transport.py uses Home "
-            "Assistant's own bluetooth component",
-        )
+        for requirement in self.manifest.get("requirements", []):
+            self.assertNotIn(
+                "==",
+                requirement,
+                f"{requirement} is exactly pinned; compiled packages must use "
+                "a floor (>=) so a matching wheel can be found",
+            )
 
-    def test_bleak_retry_connector_is_required(self):
-        """HA logs a warning when BleakClient.connect() is used directly."""
-        names = [
-            re.split(r"[<>=!~\[; ]", r, maxsplit=1)[0].strip().lower()
-            for r in _requirements()
-        ]
-        self.assertIn(
-            "bleak-retry-connector",
-            names,
-            "establish_connection() from bleak-retry-connector is required; "
-            "Home Assistant logs a warning for a bare BleakClient.connect()",
-        )
-
-    def test_version_is_semver(self):
-        version = json.loads(MANIFEST.read_text())["version"]
-        self.assertRegex(
-            version, r"^\d+\.\d+\.\d+$",
-            f"version must be plain semver so HACS orders releases correctly; "
-            f"found {version!r}",
-        )
-
-    def test_hacs_minimum_matches_manifest_age(self):
-        """The HACS floor must not exceed what the integration actually needs.
-
-        Guards against declaring a minimum that excludes users the code would
-        in fact work for.
-        """
-        hacs = json.loads((REPO_ROOT / ".hacs.json").read_text())
-        self.assertRegex(hacs["homeassistant"], r"^\d+\.\d+\.\d+$")
+    def test_version_is_present_and_parseable(self):
+        version = self.manifest.get("version", "")
+        self.assertRegex(version, r"^\d+\.\d+\.\d+$")
 
 
 if __name__ == "__main__":

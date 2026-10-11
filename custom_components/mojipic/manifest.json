@@ -9,8 +9,7 @@
     "bluetooth",
     "bluetooth_adapters",
     "http",
-    "image",
-    "image_upload"
+    "image"
   ],
   "documentation": "https://github.com/xjazc03/ha-mojipic-AI",
   "integration_type": "hub",
@@ -20,5 +19,5 @@
     "Pillow>=11",
     "bleak-retry-connector>=3.7"
   ],
-  "version": "1.1.6"
+  "version": "1.1.7"
 }
