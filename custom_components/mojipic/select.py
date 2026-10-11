@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 from datetime import timedelta
 
+from homeassistant import config_entries
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
@@ -37,8 +38,16 @@ async def async_setup_entry(
 ) -> None:
     bundle = hass.data[DOMAIN][entry.entry_id]
     entity = MojipicImageSelect(hass, entry, bundle)
-    await entity.async_refresh_options()
+    # Load the option list BEFORE async_add_entities, because populating it
+    # used to be what triggered the first async_write_ha_state -- and an
+    # entity that has not been added yet has no entity_id, so that raises and
+    # takes the whole select platform down with it. The entity disappears from
+    # the dashboard entirely, while the other platforms keep working, which
+    # makes it look like the entity was deleted rather than broken.
+    await entity.async_refresh_options(write_state=False)
     async_add_entities([entity])
+    entity._added = True
+    entity.async_write_ha_state()
 
     entry.async_on_unload(
         async_track_time_interval(
@@ -60,6 +69,7 @@ class MojipicImageSelect(SelectEntity):
     _attr_icon = "mdi:image-multiple"
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry, bundle) -> None:
+        super().__init__()
         self.hass = hass
         self.entry = entry
         self.coordinator = bundle["coordinator"]
@@ -76,6 +86,9 @@ class MojipicImageSelect(SelectEntity):
         )
         self._options: list[str] = []
         self._current: str | None = None
+        # Set once async_add_entities has run. Writing state before that is
+        # what made this entity vanish, so every write goes through a guard.
+        self._added: bool = False
         # Picked up right after the upload flow stores a new image.
         entry.async_on_unload(
             async_dispatcher_connect(
@@ -93,7 +106,7 @@ class MojipicImageSelect(SelectEntity):
         """Re-read the stored list when the upload flow adds an image."""
         self.hass.async_create_task(self.async_refresh_options())
 
-    async def async_refresh_options(self) -> None:
+    async def async_refresh_options(self, write_state: bool = True) -> None:
         """Pick up newly uploaded images without a restart."""
         entries = await self.manager.async_list()
         # The upload entry always sorts first so it is where the eye lands.
@@ -102,7 +115,10 @@ class MojipicImageSelect(SelectEntity):
             self._options = options
             if self._current and self._current not in options:
                 self._current = None
-            self.async_write_ha_state()
+            # Only write state once the entity is actually registered. An
+            # unadded entity has no entity_id and this raises.
+            if write_state and self._added:
+                self.async_write_ha_state()
 
     @property
     def options(self) -> list[str]:

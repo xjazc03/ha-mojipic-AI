@@ -33,6 +33,7 @@ class MojipicBattery(SensorEntity):
     _attr_should_poll = False
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry, bundle) -> None:
+        super().__init__()
         self.coordinator = bundle["coordinator"]
         address = entry.data["address"]
         self._attr_unique_id = f"{address.lower()}_battery"

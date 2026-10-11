@@ -99,6 +99,45 @@ class TestSetupContainment(unittest.TestCase):
         self.assertIn("async_unload_entry", src)
         self.assertIn("async_stop", src)
 
+    def test_entities_call_super_init(self):
+        """All three entities skipped Entity.__init__().
+
+        Home Assistant's Entity.__init__ establishes the instance state the
+        platform later mutates (entity_id, platform, registry wiring).
+        Skipping it raises AttributeError the first time the platform touches
+        the entity -- which is how the select entity ended up vanishing while
+        the other platforms kept working.
+        """
+        import re
+
+        pattern = re.compile(r"def __init__\(self,.*?\) -> None:\n(.*?)(?=\n)", re.S)
+        for module in ("select", "image", "sensor"):
+            src = _source(module)
+            bodies = pattern.findall(src)
+            self.assertTrue(bodies, f"{module}.py has no __init__ found")
+            for body in bodies:
+                self.assertIn(
+                    "super().__init__()",
+                    body,
+                    f"{module}.py __init__ does not call super().__init__()",
+                )
+
+    def test_select_guards_state_writes_until_added(self):
+        """Writing state before async_add_entities kills the whole platform."""
+        src = _source("select")
+        self.assertIn(
+            "if write_state and self._added:",
+            src,
+            "async_refresh_options must not write state before the entity is "
+            "registered; this raises and removes the dropdown entirely",
+        )
+        setup = src.split("async def async_setup_entry")[1].split("class ")[0]
+        self.assertLess(
+            setup.index("async_add_entities"),
+            setup.index("entity._added = True"),
+            "the entity must be added before it is marked added",
+        )
+
 
 class TestStartupOrdering(unittest.TestCase):
     def test_interval_is_registered_inside_the_guarded_block(self):

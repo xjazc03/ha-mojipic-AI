@@ -27,6 +27,7 @@ class MojipicImage(ImageEntity):
     _attr_translation_key = "image"
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry, bundle) -> None:
+        super().__init__()
         self.hass = hass
         self.entry = entry
         self.coordinator = bundle["coordinator"]

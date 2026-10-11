@@ -108,6 +108,12 @@ directory (for example `mojipic_images/doorbell.png`) or upload a new one.
 There is a second route to the same dialog: **Settings → Devices & Services →
 MojiPic → ⚙ Configure**.
 
+**If you only see a battery sensor and an image entity, but no Image dropdown,
+the `select` platform failed to load.** The other two entities come from
+different platforms, so they survive — which makes this look like the dropdown
+was deleted rather than broken. Reload the integration (or restart Home
+Assistant) and check the log for `mojipic` around the startup time.
+
 ### Showing images
 
 From an automation:
