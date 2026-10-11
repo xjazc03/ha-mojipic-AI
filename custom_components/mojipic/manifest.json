@@ -1,13 +1,22 @@
 {
   "domain": "mojipic",
   "name": "MojiPic",
-  "codeowners": ["@xjazc03"],
+  "codeowners": [
+    "@xjazc03"
+  ],
   "config_flow": true,
-  "dependencies": ["bluetooth", "http", "image"],
+  "dependencies": [
+    "bluetooth_adapters",
+    "bluetooth",
+    "http",
+    "image"
+  ],
   "documentation": "https://github.com/xjazc03/ha-mojipic-AI",
   "integration_type": "hub",
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/xjazc03/ha-mojipic-AI/issues",
-  "requirements": ["Pillow>=11"],
-  "version": "1.0.2"
+  "requirements": [
+    "Pillow>=11"
+  ],
+  "version": "1.0.3"
 }

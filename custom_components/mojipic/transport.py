@@ -1,17 +1,34 @@
 """BLE transport abstraction for MojiPic.
 
-This is the seam that makes the integration testable without hardware, and
-swappable if in-process writes turn out not to work.
+Follows Home Assistant's documented pattern for Bluetooth integrations:
 
-**Honest status of the transport:** the default transport uses Home Assistant
-Core's own Bluetooth stack for *active GATT connections and writes*. HA's
-Bluetooth support is primarily built around passive advertisement monitoring,
-so **whether it can sustain 192 write-with-response operations has not been
-verified.** This was not testable on the development host, which has no
-Bluetooth radio. Treat it as pending on-host verification.
+  * Discover with ``bluetooth.async_get_scanner(hass)``, which returns the
+    shared ``BleakScanner`` wrapper. This avoids starting a second scanner and
+    keeps working when the user changes adapter settings.
+  * Connect with ``BleakClient`` over the ``BLEDevice`` that scanner returned,
+    so the connection is routed back through whichever adapter or ESPHome
+    Bluetooth proxy actually saw the device.
+  * Use a connection timeout of at least 10 seconds: BlueZ must resolve
+    services on first contact, and transient failures are normal.
+  * Do not reuse a ``BleakClient`` across connections; a fresh one per
+    operation is more reliable.
 
-If it turns out to be unsuitable, implement `MojipicTransport` and pass it in.
-Nothing else needs to change.
+**Honest status.** This layer has never executed against a real Home Assistant
+instance. It is written against the documented API and reviewed against the
+Home Assistant source, but only a live host can confirm it.
+
+Three API errors were found here after the first live attempt, all of the same
+kind -- a signature assumed rather than read:
+
+  * ``bluetooth.async_scanner_count(hass, connectable)`` takes ``hass``; it was
+    being called with no arguments, raising ``TypeError`` and surfacing as
+    "Unknown error occurred" when the scan form was submitted.
+  * ``bluetooth.async_register_callback(hass, callback, match_dict, mode)`` has
+    ``match_dict`` as its third positional argument; the scanning mode was being
+    passed into that slot.
+  * ``bluetooth.async_ble_device_from_address(hass, address)`` is synchronous and
+    returns a ``BLEDevice``, not a connected client. It was being awaited and
+    treated as a client with ``write_gatt_char``.
 """
 
 from __future__ import annotations
@@ -28,7 +45,6 @@ from .const import (
     CHAR_DEVICE_COMMANDS,
     CHAR_FIRMWARE_VERSION,
     CHAR_MANUFACTURER,
-    CHAR_MODEL,
     CHAR_PROCESSOR_ID,
     CHAR_SW_REVISION,
     CHAR_WRITE_IMAGE,
@@ -37,6 +53,10 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+# Home Assistant guidance: BlueZ needs to resolve services on first contact, so
+# the connection timeout must be generous.
+MIN_CONNECT_TIMEOUT = 10.0
 
 
 class TransportError(Exception):
@@ -83,80 +103,105 @@ class MojipicTransport(abc.ABC):
 
 
 class HomeAssistantBluetoothTransport(MojipicTransport):
-    """Default transport, using Home Assistant Core's Bluetooth stack.
-
-    Pending on-host verification -- see the module docstring.
-    """
+    """Default transport, built on Home Assistant's Bluetooth stack."""
 
     def __init__(self, hass) -> None:
         self.hass = hass
         self._client = None
         self._address: Optional[str] = None
+        self._ble_device = None
 
+    # -- helpers ------------------------------------------------------------
+    def _scanner(self):
+        """The shared Home Assistant BleakScanner wrapper."""
+        from homeassistant.components import bluetooth
+
+        return bluetooth.async_get_scanner(self.hass)
+
+    def _bluetooth(self):
+        from homeassistant.components import bluetooth
+
+        return bluetooth
+
+    @staticmethod
+    def _advertised_name(device, advertisement_data) -> str:
+        return (
+            advertisement_data.local_name
+            or getattr(device, "name", None)
+            or ""
+        ).strip()
+
+    # -- discovery ----------------------------------------------------------
     async def async_discover(
         self, name_prefix: str, timeout: int
     ) -> Optional[str]:
-        from homeassistant.components import bluetooth
+        """Scan using Home Assistant's shared scanner."""
+        prefix = (name_prefix or "").strip().lower()
 
-        found: dict[str, str] = {}
-        loop = asyncio.get_running_loop()
-
-        @bluetooth.callback
-        def _on_advertisement(device, advertisement_data) -> None:
-            name = (advertisement_data.local_name or device.name or "").strip()
-            if name.lower().startswith(name_prefix.lower()):
-                found.setdefault(device.address, name)
-
-        cancel = bluetooth.async_register_callback(
-            self.hass, _on_advertisement, bluetooth.BluetoothScanningMode.ACTIVE
-        )
         try:
-            deadline = loop.time() + timeout
-            while loop.time() < deadline and not found:
-                await asyncio.sleep(0.5)
-        finally:
-            cancel()
+            scanner = self._scanner()
+        except Exception as err:  # noqa: BLE001
+            raise TransportError(f"bluetooth is unavailable: {err}") from err
 
-        if not found:
-            return None
-        address = next(iter(found))
-        _LOGGER.debug("Discovered MojiPic at %s", address)
-        return address
+        try:
+            devices = await scanner.discover(timeout=timeout, return_adv=True)
+        except Exception as err:  # noqa: BLE001
+            raise TransportError(f"bluetooth scan failed: {err}") from err
 
+        for address, (device, advertisement_data) in (devices or {}).items():
+            if self._advertised_name(device, advertisement_data).lower().startswith(prefix):
+                _LOGGER.debug("Discovered MojiPic at %s", address)
+                self._address = address.upper()
+                return address.upper()
+
+        return None
+
+    # -- connection ---------------------------------------------------------
     async def async_connect(self, address: str) -> None:
-        from homeassistant.components import bluetooth
+        from bleak import BleakClient
 
         await self.async_disconnect()
         self._address = address
+
+        # Prefer a BLEDevice the scanner has already seen: connecting through it
+        # routes the connection to the adapter or proxy that actually has the
+        # device in range. Fall back to the raw address if it is not known.
+        ble_device = None
         try:
-            self._client = await asyncio.wait_for(
-                bluetooth.async_ble_device_from_address(self.hass, address, True),
-                timeout=CONNECT_TIMEOUT,
-            )
-        except asyncio.TimeoutError as err:
-            raise TransportError(
-                f"timed out connecting to {address}"
-            ) from err
-        except Exception as err:  # noqa: BLE001
-            raise TransportError(f"could not connect to {address}: {err}") from err
-
-        if self._client is None:
-            raise TransportError(
-                f"{address} is not reachable. Check the display is powered on, "
-                "in range, and not connected to another app."
-            )
-
-        rssi = await self.async_rssi()
-        if rssi is not None:
-            if rssi < RSSI_WARN_THRESHOLD:
-                _LOGGER.warning(
-                    "MojiPic link is weak (rssi=%s dBm). Pushes may fail "
-                    "intermittently; consider moving the Bluetooth adapter "
-                    "closer to the display or using an ESPHome Bluetooth proxy.",
-                    rssi,
+            bluetooth = self._bluetooth()
+            # NOTE: this API is synchronous and returns a BLEDevice, not a client.
+            if hasattr(bluetooth, "async_ble_device_from_address"):
+                ble_device = bluetooth.async_ble_device_from_address(
+                    self.hass, address, True
                 )
-            else:
-                _LOGGER.debug("MojiPic connected, rssi=%s dBm", rssi)
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug("Could not resolve BLEDevice for %s: %s", address, err)
+
+        timeout = max(MIN_CONNECT_TIMEOUT, CONNECT_TIMEOUT)
+        client = BleakClient(ble_device or address, timeout=timeout)
+        try:
+            await client.connect()
+        except Exception as err:  # noqa: BLE001
+            with contextlib.suppress(Exception):
+                await client.disconnect()
+            raise TransportError(
+                f"could not connect to {address}: {err}. Check the display is "
+                "powered on, in range, and not connected to another app."
+            ) from err
+
+        if not client.is_connected:
+            raise TransportError(f"{address} did not accept a connection")
+
+        self._client = client
+        self._ble_device = ble_device
+        rssi = await self.async_rssi()
+        if rssi is not None and rssi < RSSI_WARN_THRESHOLD:
+            _LOGGER.warning(
+                "MojiPic link is weak (rssi=%s dBm). Pushes may fail "
+                "intermittently; consider moving the adapter or adding an "
+                "ESPHome Bluetooth proxy closer to the display.",
+                rssi,
+            )
 
     async def async_disconnect(self) -> None:
         if self._client is not None:
@@ -170,9 +215,13 @@ class HomeAssistantBluetoothTransport(MojipicTransport):
         if self._client is None:
             raise TransportError("not connected")
         try:
-            await self._client.write_gatt_char(characteristic, data, response=response)
+            await self._client.write_gatt_char(
+                characteristic, data, response=response
+            )
         except Exception as err:  # noqa: BLE001
-            raise TransportError(f"write to {characteristic} failed: {err}") from err
+            raise TransportError(
+                f"write to {characteristic} failed: {err}"
+            ) from err
 
     async def async_read(self, characteristic: str) -> Optional[bytes]:
         if self._client is None:
@@ -187,16 +236,13 @@ class HomeAssistantBluetoothTransport(MojipicTransport):
     async def async_rssi(self) -> Optional[int]:
         if self._client is None:
             return None
-        try:
-            # BleakClient exposes get_services(); rssi is available on some
-            # backends via the raw handle. Not portable, so treat as best-effort.
-            rssi = getattr(self._client, "rssi", None)
-            if callable(rssi):
+        rssi = getattr(self._client, "rssi", None)
+        if callable(rssi):
+            with contextlib.suppress(Exception):
                 rssi = rssi()
-            if rssi is None:
-                return None
-            return int(rssi)
-        except Exception:  # noqa: BLE001
+        try:
+            return int(rssi) if rssi is not None else None
+        except (TypeError, ValueError):
             return None
 
     @property

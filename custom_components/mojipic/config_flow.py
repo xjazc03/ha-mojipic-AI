@@ -91,11 +91,25 @@ def _schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
 
 
 async def _async_bluetooth_available(hass) -> bool:
+    """Whether Home Assistant can currently see any Bluetooth adapter.
+
+    `async_scanner_count(hass, connectable)` takes `hass` as its first
+    argument. An earlier version of this file called it with no arguments,
+    which raised TypeError and surfaced to the user as the unhelpful
+    "Unknown error occurred" when they submitted the scan form.
+    """
     try:
         from homeassistant.components import bluetooth
     except ImportError:  # pragma: no cover
         return False
-    return getattr(bluetooth, "async_scanner_count", lambda: 0)() > 0
+
+    counter = getattr(bluetooth, "async_scanner_count", None)
+    if counter is None:  # pragma: no cover - very old cores
+        return True
+    try:
+        return counter(hass) > 0
+    except Exception:  # noqa: BLE001 - never let a probe break setup
+        return True
 
 
 class MojipicConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -121,11 +135,18 @@ class MojipicConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         found = await transport.async_discover(
                             prefix, DISCOVERY_TIMEOUT
                         )
-                    except TransportError:
+                    except TransportError as err:
+                        _LOGGER.warning("MojiPic scan failed: %s", err)
                         found = None
-                    if not found:
+                    except Exception as err:  # noqa: BLE001
+                        # Never show the user a bare traceback from the scan
+                        # path. Surface it in the log and explain in the form.
+                        _LOGGER.exception("Unexpected error scanning for MojiPic")
+                        errors["base"] = "scan_failed"
+                        found = None
+                    if not found and "base" not in errors:
                         errors["base"] = "not_found"
-                    else:
+                    elif found:
                         address = found
 
             if address and "base" not in errors:

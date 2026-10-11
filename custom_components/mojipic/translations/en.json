@@ -14,6 +14,7 @@
     },
     "error": {
       "not_found": "No MojiPic found. {help_not_found}",
+      "scan_failed": "The Bluetooth scan could not complete. This usually means Home Assistant has no usable Bluetooth adapter. Check Settings, System, Hardware, or that an ESPHome Bluetooth proxy is set up and powered. The full error is in the Home Assistant log.",
       "no_bluetooth": "Home Assistant cannot see a Bluetooth adapter. {no_bluetooth_help}",
       "invalid_address": "That does not look like a Bluetooth address. Use the format AA:BB:CC:DD:EE:FF."
     },
