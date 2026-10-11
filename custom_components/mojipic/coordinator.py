@@ -153,24 +153,39 @@ class MojipicCoordinator:
 
     # -- lifecycle ----------------------------------------------------------
     async def async_start(self) -> None:
+        """Start the worker, connect, and schedule health checks.
+
+        Failure must be total. A half-started coordinator -- a live worker
+        with no matching unload -- keeps firing against entities that were
+        never fully initialised, producing an endless stream of
+        "Attribute hass is None" and "async_write_ha_state from a thread other
+        than the event loop" errors. A wedged Home Assistant restart loop is a
+        far worse outcome than a clean setup failure, so anything raised here
+        tears the whole coordinator down before propagating.
+        """
         self._running = True
         self._ensure_worker()
-        await self._async_ensure_connected()
-        self._unsub_interval = async_track_time_interval(
-            self.hass,
-            self._async_health_tick,
-            # async_track_time_interval requires a datetime.timedelta. Passing
-            # raw seconds raises "AttributeError: 'float' object has no
-            # attribute 'total_seconds'".
-            #
-            # It must be the *stdlib* timedelta. `homeassistant.util.dt` does
-            # not export one -- it imports datetime internally as `dt` and
-            # exposes utcnow/parse_datetime/etc, but no `timedelta` attribute.
-            # Using dt_util.timedelta fails at setup with
-            # "AttributeError: module 'homeassistant.util.dt' has no attribute
-            # 'timedelta'".
-            timedelta(seconds=HEALTH_INTERVAL),
-        )
+        try:
+            await self._async_ensure_connected()
+            self._unsub_interval = async_track_time_interval(
+                self.hass,
+                self._async_health_tick,
+                # async_track_time_interval requires a datetime.timedelta.
+                # Passing raw seconds raises "AttributeError: 'float' object
+                # has no attribute 'total_seconds'".
+                #
+                # It must be the *stdlib* timedelta.
+                # `homeassistant.util.dt` does not export one -- it imports
+                # datetime internally as `dt` and exposes utcnow() and
+                # parse_datetime(), but no `timedelta` attribute. Using
+                # dt_util.timedelta fails at setup on any recent core.
+                timedelta(seconds=HEALTH_INTERVAL),
+            )
+        except BaseException:
+            _LOGGER.exception("MojiPic coordinator failed to start; tearing down")
+            with contextlib.suppress(Exception):
+                await self.async_stop()
+            raise
 
     async def async_stop(self) -> None:
         self._running = False

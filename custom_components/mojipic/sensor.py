@@ -51,6 +51,10 @@ class MojipicBattery(SensorEntity):
         )
 
     def _handle_update(self) -> None:
+        # Guard: see image.py. Writing state before the entity platform has
+        # assigned `hass` raises and repeats on every signal.
+        if self.hass is None:
+            return
         self.async_write_ha_state()
 
     @property

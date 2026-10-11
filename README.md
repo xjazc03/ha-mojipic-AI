@@ -242,7 +242,21 @@ automation:
   event changes the address, use `mojipic.rescan` or the repair flow — it finds the
   display again and re-persists the address.
 
-### A known trap this project already fell into
+### A second trap: a failed setup that wedged Home Assistant
+
+An earlier release used `dt_util.timedelta`, which does not exist. Setup raised,
+and the failure left a coordinator still running against entities that had never
+finished initialising. That produced an endless stream of
+`Attribute hass is None` errors and held Core in a **restart loop** — the display
+integration took the whole home automation offline.
+
+Startup is now failure-atomic: if anything raises during setup, the coordinator is
+torn down and the entry is removed before the error propagates. One broken line
+can still fail setup, but it can no longer take Home Assistant down with it.
+
+That rule is enforced by `tests/test_startup_safety.py`.
+
+### A third trap
 
 An earlier release pinned `Pillow==10.4.0`. That version has no Python 3.14 wheel, so
 pip tried to build it from source, failed, and Home Assistant refused to load the

@@ -11,6 +11,7 @@ in the config entry and reused, which is reported as "configured" rather than
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from pathlib import Path
 
@@ -80,8 +81,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "manager": manager,
     }
 
-    await coordinator.async_start()
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    try:
+        await coordinator.async_start()
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    except BaseException:
+        # Never leave a half-initialised entry behind. A coordinator that
+        # keeps running after setup failed hammers entities that were never
+        # fully set up, which is what turned one bad line of code into a
+        # Home Assistant restart loop.
+        _LOGGER.exception("MojiPic setup failed; cleaning up entry")
+        hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
+        with contextlib.suppress(Exception):
+            await coordinator.async_stop()
+        raise
+
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     return True
 

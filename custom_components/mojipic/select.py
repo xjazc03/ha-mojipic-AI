@@ -11,9 +11,10 @@ from datetime import timedelta
 
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import CONNECTION_BLUETOOTH, DeviceInfo
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_time_interval
 
@@ -75,9 +76,22 @@ class MojipicImageSelect(SelectEntity):
         )
         self._options: list[str] = []
         self._current: str | None = None
+        # Picked up right after the upload flow stores a new image.
+        entry.async_on_unload(
+            async_dispatcher_connect(
+                hass,
+                f"{DOMAIN}_{entry.entry_id}_images_changed",
+                self._handle_images_changed,
+            )
+        )
 
     async def async_refresh_options_hack(self, _now=None) -> None:
         await self.async_refresh_options()
+
+    @callback
+    def _handle_images_changed(self, *_args) -> None:
+        """Re-read the stored list when the upload flow adds an image."""
+        self.hass.async_create_task(self.async_refresh_options())
 
     async def async_refresh_options(self) -> None:
         """Pick up newly uploaded images without a restart."""

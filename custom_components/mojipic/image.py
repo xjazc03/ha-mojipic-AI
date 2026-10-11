@@ -53,6 +53,13 @@ class MojipicImage(ImageEntity):
 
     @callback
     def _handle_coordinator_update(self) -> None:
+        # `hass` is assigned by the entity platform after construction. A
+        # dispatcher signal can arrive before that, and calling
+        # async_write_ha_state then raises
+        # "AttributeError: Attribute hass is None for <entity unknown>".
+        # That error repeats on every signal and is pure noise.
+        if self.hass is None:
+            return
         manufacturer = self.coordinator.manufacturer
         model = self.coordinator.firmware
         if manufacturer or model:
