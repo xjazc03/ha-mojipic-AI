@@ -106,13 +106,20 @@ The picker lets you either choose a file already in your Home Assistant config
 directory (for example `mojipic_images/doorbell.png`) or upload a new one.
 
 There is a second route to the same dialog: **Settings → Devices & Services →
-MojiPic → ⚙ Configure**.
+MojiPic → ⚙ Configure**, then the **Reconfigure** button.
 
 **If you only see a battery sensor and an image entity, but no Image dropdown,
 the `select` platform failed to load.** The other two entities come from
 different platforms, so they survive — which makes this look like the dropdown
 was deleted rather than broken. Reload the integration (or restart Home
 Assistant) and check the log for `mojipic` around the startup time.
+
+**If the upload option gives you an error and no dialog opens**, read the error
+text. This path has been wrong twice before, and both times the failure was a
+Home Assistant API that does not exist (`homeassistant.util.dt.timedelta`, then
+`issue_registry.async_get_issue`). The flow now uses a reconfigure config flow
+started through `config_entries.flow.async_init` with
+`source=SOURCE_RECONFIGURE`, which is a documented path.
 
 ### Showing images
 

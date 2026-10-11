@@ -17,7 +17,6 @@ from typing import Any
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers import issue_registry as ir
 from homeassistant.core import callback
 from homeassistant.helpers import selector
 
@@ -52,7 +51,6 @@ from .const import (
     DISCOVERY_TIMEOUT,
     DOMAIN,
 )
-from .const import ISSUE_RECONNECT, ISSUE_UPLOAD_IMAGE
 from .image_encode import ImageConversionError
 from .image_manager import UploadResolutionError, resolve_upload_path
 from .transport import TransportError, default_transport
@@ -199,6 +197,86 @@ class MojipicConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             },
         )
 
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Pick an image file and push it, without writing any YAML.
+
+        This is the flow behind the "Upload image..." entry in the select
+        entity's dropdown. It is a *reconfigure* flow rather than a repair
+        flow on purpose: it reopens a config entry that already exists and is
+        reached with the documented
+
+            hass.config_entries.flow.async_init(
+                DOMAIN,
+                context={"source": SOURCE_RECONFIGURE, "entry_id": entry_id},
+            )
+
+        Repairs were the original choice, and every part of that path turned
+        out to be different from what it looked like -- there is no module
+        level `async_get_issue`, and `IssueEntry` has no `async_create_flow`
+        at all. The reconfigure path uses two calls whose signatures are
+        pinned by `tests/test_ha_api.py`.
+        """
+        errors: dict[str, str] = {}
+        entry = self.hass.config_entries.async_get_entry(
+            self.context["entry_id"]
+        )
+        if entry is None:
+            return self.async_abort(reason="unknown_entry")
+
+        bundle = self.hass.data.get(DOMAIN, {}).get(entry.entry_id)
+        if bundle is None:
+            # The entry is not loaded, so there is no coordinator to push with.
+            # Storing the image still works, so report it rather than failing.
+            return self.async_abort(reason="reload_required")
+
+        if user_input is not None:
+            manager = bundle["manager"]
+            coordinator = bundle["coordinator"]
+            try:
+                raw, filename = resolve_upload_path(
+                    self.hass, user_input.get("file")
+                )
+                stored = await manager.async_upload(raw, filename)
+            except UploadResolutionError as err:
+                _LOGGER.warning("MojiPic upload failed: %s", err)
+                errors["base"] = "not_readable"
+            except ImageConversionError as err:
+                _LOGGER.warning("MojiPic upload rejected: %s", err)
+                errors["base"] = "bad_image"
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception("Unexpected error uploading a MojiPic image")
+                errors["base"] = "unknown"
+            else:
+                framebuffer = await manager.async_framebuffer(stored["id"])
+                if framebuffer is not None:
+                    result = await coordinator.async_display(
+                        framebuffer, stored["id"]
+                    )
+                    if not result.outcome.ok:
+                        _LOGGER.warning(
+                            "Image %s stored but not displayed: %s",
+                            stored["id"], result.error,
+                        )
+                _async_dispatch_refresh(self.hass, entry.entry_id)
+                _LOGGER.info("Stored MojiPic image %s (%s)", stored["id"], filename)
+                # Nothing about the entry itself changed, so avoid reloading:
+                # a reload would drop the BLE connection the user just used.
+                return self.async_update_reload_and_abort(
+                    entry,
+                    data_updates={},
+                    reload_even_if_entry_is_unchanged=False,
+                )
+
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=vol.Schema(
+                {vol.Required("file"): selector.FileSelector({"accept": "image/*"})}
+            ),
+            errors=errors,
+        )
+
     @staticmethod
     @callback
     def async_get_options_flow(entry: config_entries.ConfigEntry):
@@ -237,95 +315,4 @@ class MojipicOptionsFlow(config_entries.OptionsFlow):
                     ),
                 }
             ),
-        )
-
-
-class MojipicRepairFlow(_RepairFlowBase):
-    """Repair flows reached from a repair card or an entity action.
-
-    Home Assistant dispatches to ``async_step_<handler_key>``, where the key is
-    whatever was passed to ``async_create_flow``. An earlier version of this
-    file only defined ``async_step_init``, which no key ever matched -- so the
-    whole class was unreachable and the reconnect path silently did nothing.
-
-    Steps:
-      * ``upload_image`` -- pick a file, store it, display it. This is what
-        makes the "Upload image..." option in the select entity work without
-        any YAML.
-      * ``reconnect`` -- rescan and re-persist the remembered address.
-    """
-
-    def __init__(self, hass, handler: str, context, data) -> None:
-        self._entry_id = (context or {}).get("entry_id")
-
-    def _bundle(self):
-        if not self._entry_id:
-            raise HomeAssistantError("This repair is not linked to a MojiPic.")
-        return self.hass.data[DOMAIN][self._entry_id]
-
-    async def async_step_upload_image(self, user_input=None):
-        """Let the user choose an image file and push it to the display."""
-        errors: dict[str, str] = {}
-
-        if user_input is not None:
-            manager = self._bundle()["manager"]
-            coordinator = self._bundle()["coordinator"]
-            chosen = user_input.get("file")
-
-            try:
-                raw, filename = resolve_upload_path(self.hass, chosen)
-                entry_meta = await manager.async_upload(raw, filename)
-            except UploadResolutionError as err:
-                errors["base"] = "not_readable"
-                _LOGGER.warning("MojiPic upload failed: %s", err)
-            except ImageConversionError as err:
-                errors["base"] = "bad_image"
-                _LOGGER.warning("MojiPic upload rejected: %s", err)
-            except HomeAssistantError:
-                raise
-            except Exception as err:  # noqa: BLE001
-                errors["base"] = "unknown"
-                _LOGGER.exception("Unexpected error uploading a MojiPic image")
-            else:
-                framebuffer = await manager.async_framebuffer(entry_meta["id"])
-                if framebuffer is not None:
-                    result = await coordinator.async_display(
-                        framebuffer, entry_meta["id"]
-                    )
-                    if not result.outcome.ok:
-                        _LOGGER.warning(
-                            "Image %s was stored but not displayed: %s",
-                            entry_meta["id"], result.error,
-                        )
-                # Stored successfully: dismiss the repair card.
-                ir.async_delete_issue(self.hass, DOMAIN, ISSUE_UPLOAD_IMAGE)
-                _async_dispatch_refresh(self.hass, self._entry_id)
-                return self.async_create_entry(title="", data={})
-
-        return self.async_show_form(
-            step_id="upload_image",
-            data_schema=vol.Schema(
-                {
-                    vol.Required("file"): selector.FileSelector(
-                        {"accept": "image/*"}
-                    )
-                }
-            ),
-            errors=errors,
-        )
-
-    async def async_step_reconnect(self, user_input=None):
-        """Rescan for the display and re-persist its remembered address."""
-        if user_input is not None:
-            coordinator = self._bundle()["coordinator"]
-            new_address = await coordinator.async_rebind_if_missing()
-            if new_address:
-                ir.async_delete_issue(self.hass, DOMAIN, ISSUE_RECONNECT)
-                _async_dispatch_refresh(self.hass, self._entry_id)
-                return self.async_create_entry(title="", data={})
-            return self.async_abort(reason="still_unreachable")
-
-        return self.async_show_form(
-            step_id="reconnect",
-            description_placeholders={"help": _NOT_FOUND_HELP},
         )

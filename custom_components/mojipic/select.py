@@ -23,7 +23,6 @@ from .const import (
     CONF_NAME,
     DEFAULT_NAME_PREFIX,
     DOMAIN,
-    ISSUE_UPLOAD_IMAGE,
     UPLOAD_OPTION,
 )
 from .image_encode import ImageConversionError
@@ -187,32 +186,38 @@ class MojipicImageSelect(SelectEntity):
 
 
     def _async_open_upload_flow(self) -> None:
-        """Open the upload repair flow.
+        """Open the upload form.
 
-        Repairs are the documented way for an entity to open a flow that needs
-        input: create a fixable issue, then start its flow. The user gets a
-        file picker, so no YAML is needed.
+        This starts a *reconfigure* config flow, which is the documented way
+        for an entity to ask the user for input:
+
+            hass.config_entries.flow.async_init(
+                DOMAIN,
+                context={"source": SOURCE_RECONFIGURE, "entry_id": entry_id},
+            )
+
+        Home Assistant reads the entry id from that context and routes the flow
+        to `MojipicConfigFlow.async_step_reconfigure`, which shows the file
+        picker.
+
+        An earlier version used a repairs flow instead. That path does not
+        work: `homeassistant.helpers.issue_registry` has no module-level
+        `async_get_issue` (the method lives on the registry returned by
+        `async_get`), and `IssueEntry` has no `async_create_flow` at all.
+        Clicking the option raised AttributeError in the UI.
         """
-        from homeassistant.helpers import issue_registry as ir
-
-        ir.async_create_issue(
-            self.hass,
-            DOMAIN,
-            ISSUE_UPLOAD_IMAGE,
-            is_fixable=True,
-            severity=ir.IssueSeverity.WARNING,
-            translation_key=ISSUE_UPLOAD_IMAGE,
-            data={"entry_id": self.entry.entry_id},
+        # `flow.async_init` is a coroutine, so it must be scheduled rather
+        # than awaited -- `async_select_option` returns before the dialog is
+        # built, which is what we want.
+        self.hass.async_create_task(
+            self.hass.config_entries.flow.async_init(
+                DOMAIN,
+                context={
+                    "source": config_entries.SOURCE_RECONFIGURE,
+                    "entry_id": self.entry.entry_id,
+                },
+            )
         )
-        ir.async_get_issue(
-            self.hass, DOMAIN, ISSUE_UPLOAD_IMAGE
-        ).async_create_flow(
-            ISSUE_UPLOAD_IMAGE,
-            context={
-                "source": config_entries.SOURCE_REPAIR,
-                "entry_id": self.entry.entry_id,
-            },
-        )
-        # Put the dropdown back to whatever it was showing; the upload is a
-        # side action, not a selection.
+        # Uploading is a side action, not a selection, so put the dropdown back
+        # to whatever it was showing.
         self.async_write_ha_state()

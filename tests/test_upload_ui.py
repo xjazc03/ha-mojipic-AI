@@ -151,33 +151,41 @@ class TestResolveUploadPath(unittest.TestCase):
             image_manager.resolve_upload_path(self.hass, "../outside_secret.png")
 
 
-class TestRepairFlowReachable(unittest.TestCase):
-    """The bug: async_step_init matched no handler key, so nothing ran."""
+class TestUploadFlowReachable(unittest.TestCase):
+    """The upload form must be reachable from the dropdown.
 
-    def test_steps_match_the_handler_keys_we_use(self):
-        cls = config_flow.MojipicRepairFlow
+    The flow went through repairs first, and every part of that path turned
+    out to be different from what it looked like. Home Assistant's
+    `issue_registry` has no module-level `async_get_issue`, and `IssueEntry`
+    has no `async_create_flow`, so the option raised an AttributeError the
+    first time it was used.
+    """
+
+    def test_reconfigure_step_exists(self):
+        config_flow = _mjloader.load_module("config_flow")
         self.assertTrue(
-            hasattr(cls, "async_step_upload_image"),
-            "async_step_upload_image must exist: this is the handler key used "
-            "by the select entity's upload option",
-        )
-        self.assertTrue(
-            hasattr(cls, "async_step_reconnect"),
-            "async_step_reconnect must exist: matches the reconnect handler key",
+            hasattr(config_flow.MojipicConfigFlow, "async_step_reconfigure"),
+            "the reconfigure step is what SOURCE_RECONFIGURE routes to",
         )
 
-    def test_no_bare_init_step(self):
-        """An init step is unreachable unless 'init' is a real handler key."""
-        cls = config_flow.MojipicRepairFlow
-        self.assertFalse(
-            hasattr(cls, "async_step_init"),
-            "async_step_init matched no handler key and made the whole class "
-            "dead code; remove it or rename it to a real handler key",
-        )
+    def test_repair_flow_is_gone(self):
+        """It was unreachable and used two APIs that do not exist."""
+        config_flow = _mjloader.load_module("config_flow")
+        self.assertFalse(hasattr(config_flow, "MojipicRepairFlow"))
 
-    def test_handler_keys_come_from_constants(self):
-        self.assertEqual(const.ISSUE_UPLOAD_IMAGE, "upload_image")
-        self.assertEqual(const.ISSUE_RECONNECT, "reconnect")
+    def test_select_does_not_use_the_issue_registry(self):
+        source = (
+            Path(_mjloader.PKG_PATH) / "select.py"
+        ).read_text()
+        self.assertNotIn(
+            "issue_registry",
+            source.replace(
+                # The explanatory comment mentions it on purpose.
+                "`homeassistant.helpers.issue_registry` has no module-level",
+                "",
+            ).replace("async_create_flow", ""),
+            "select.py must not reach into the issue registry to open a flow",
+        )
 
 
 class TestUploadOption(unittest.TestCase):

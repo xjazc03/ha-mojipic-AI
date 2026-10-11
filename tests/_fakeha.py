@@ -86,10 +86,36 @@ class FakeHass:
     def __init__(self, domain_data=None):
         self.data = domain_data or {}
         self.created = []
+        self.flow_inits = []
+        self.config_entries = _ConfigEntries(self)
 
     def async_create_task(self, coro):
         self.created.append(coro)
         return coro
+
+
+class _FlowManager:
+    """Records the flows an integration starts."""
+
+    def __init__(self, entries):
+        self._entries = entries
+        self.flow_inits = []
+
+    async def async_init(self, handler, *, context=None, data=None):
+        self.flow_inits.append(
+            {"handler": handler, "context": context, "data": data}
+        )
+        return {"type": "form", "step_id": "reconfigure"}
+
+    def async_get_entry(self, entry_id):
+        return self._entries._entry_by_id.get(entry_id)
+
+
+class _ConfigEntries:
+    def __init__(self, hass):
+        self._hass = hass
+        self.flow = _FlowManager(self)
+        self._entry_by_id = {}
 
 
 def install(monkey_state=None):
@@ -118,18 +144,26 @@ def install(monkey_state=None):
     def _delete_issue(hass, domain, issue_id):
         state["issues_deleted"].append((domain, issue_id))
 
-    class _Issue:
-        def __init__(self, domain, issue_id):
-            self.domain = domain
-            self.issue_id = issue_id
+    def _get_issue(hass):
+        """Real HA exposes `async_get`, not a module-level `async_get_issue`.
 
-        def async_create_flow(self, handler_key, context=None, data=None):
-            state["flows_started"].append(
-                {"handler_key": handler_key, "context": context}
-            )
+        The stub deliberately does NOT provide `async_get_issue` or
+        `async_create_flow`. Both were invented and both were absent from
+        `homeassistant.helpers.issue_registry`, which is how the upload
+        button reached an AttributeError in the UI. A fake that is more
+        generous than the real module hides exactly that class of bug, so this
+        one mirrors reality: the `async_get_issue` method lives on the
+        registry object, and `IssueEntry` has no `async_create_flow`.
+        """
 
-    def _get_issue(hass, domain, issue_id):
-        return _Issue(domain, issue_id)
+        class _Registry:
+            def __init__(self):
+                self.issues = {}
+
+            def async_get_issue(self, domain, issue_id):
+                return self.issues.get((domain, issue_id))
+
+        return _Registry()
 
     class _Severity:
         ERROR = "error"
@@ -174,6 +208,7 @@ def install(monkey_state=None):
         ConfigFlow=_FlowBase,
         OptionsFlow=_FlowBase,
         RepairsFlow=_FlowBase,
+        SOURCE_RECONFIGURE="reconfigure",
         SOURCE_REPAIR="repair")
     mod("homeassistant.components")
     mod("homeassistant.components.select", SelectEntity=FakeSelectEntity)
@@ -196,7 +231,7 @@ def install(monkey_state=None):
     mod("homeassistant.helpers.issue_registry",
         async_create_issue=_create_issue,
         async_delete_issue=_delete_issue,
-        async_get_issue=_get_issue,
+        async_get=_get_issue,
         IssueSeverity=_Severity)
     mod("homeassistant.helpers.typing", ConfigType=dict)
 

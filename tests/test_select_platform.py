@@ -161,7 +161,18 @@ class SelectPlatformTest(unittest.TestCase):
 
 
 class UploadOptionTest(unittest.TestCase):
-    """Selecting "Upload image..." must open a flow, not raise."""
+    """Selecting "Upload image..." must open a flow, not raise.
+
+    Regression: it previously called `ir.async_get_issue`, which does not
+    exist at module level in `homeassistant.helpers.issue_registry`, so the
+    click produced
+
+        module 'homeassistant.helpers.issue_registry' has no attribute
+        'async_get_issue'
+
+    in the UI. The whole repairs-based path has been replaced with a
+    reconfigure config flow.
+    """
 
     def setUp(self):
         self.state = _fakeha.install()
@@ -177,6 +188,17 @@ class UploadOptionTest(unittest.TestCase):
                 "manager": self.manager,
             }
         }
+        self.hass.config_entries._entry_by_id[self.entry.entry_id] = self.entry
+
+    def tearDown(self):
+        # Close any coroutine a test scheduled but did not drain, so an
+        # un-awaited coroutine never becomes a warning that masks a real
+        # scheduling bug later.
+        while self.hass.created:
+            coro = self.hass.created.pop()
+            close = getattr(coro, "close", None)
+            if close is not None:
+                close()
 
     def _make(self):
         added = []
@@ -184,62 +206,92 @@ class UploadOptionTest(unittest.TestCase):
         asyncio.run(self.select.async_setup_entry(self.hass, self.entry, add))
         return added[0]
 
-    def test_selecting_upload_creates_a_fixable_issue(self):
+    def _click_upload(self):
+        """Click the option and let any scheduled task actually run."""
         entity = self._make()
+
+        async def go():
+            await entity.async_select_option(self.const.UPLOAD_OPTION)
+            for coro in self.hass.created:
+                await coro
+
         try:
-            asyncio.run(entity.async_select_option(self.const.UPLOAD_OPTION))
-        except NameError as err:
+            asyncio.run(go())
+        except (NameError, AttributeError) as err:
             self.fail(
-                "NameError when the upload option is selected -- this was "
-                f"shipping: {err}"
+                f"clicking the upload option raised {err!r} -- this is the "
+                "error the user saw in the UI"
             )
-        self.assertTrue(self.state["issues_created"], "no repair issue created")
-
-    def test_upload_issue_is_marked_fixable(self):
-        """Without is_fixable the repair card has no button to open the flow."""
-        entity = self._make()
-        asyncio.run(entity.async_select_option(self.const.UPLOAD_OPTION))
-        _domain, _issue_id, kwargs = self.state["issues_created"][0]
-        self.assertTrue(kwargs.get("is_fixable"))
-
-    def test_upload_issue_carries_a_translation_key(self):
-        """Without one the UI shows a raw key instead of a title."""
-        entity = self._make()
-        asyncio.run(entity.async_select_option(self.const.UPLOAD_OPTION))
-        _domain, _issue_id, kwargs = self.state["issues_created"][0]
-        self.assertTrue(kwargs.get("translation_key"))
+        return entity
 
     def test_selecting_upload_opens_the_flow(self):
-        entity = self._make()
-        asyncio.run(entity.async_select_option(self.const.UPLOAD_OPTION))
+        """The file picker must actually open."""
+        self._click_upload()
         self.assertTrue(
-            self.state["flows_started"],
-            "the file picker never opened -- this is the click doing nothing",
+            self.hass.config_entries.flow.flow_inits,
+            "no flow was started -- clicking upload does nothing",
         )
 
-    def test_flow_handler_key_matches_the_step_name(self):
-        """The handler key must match an `async_step_<key>` on the flow class.
+    def test_flow_is_started_for_the_right_entry(self):
+        self._click_upload()
+        init = self.hass.config_entries.flow.flow_inits[0]
+        self.assertEqual(init["handler"], self.const.DOMAIN)
 
-        The earlier version of the flow only defined `async_step_init`, which
-        matched no handler key, so the entire class was unreachable and
-        clicking a repair silently did nothing.
+    def test_flow_context_carries_source_reconfigure(self):
+        """Home Assistant routes on this exact source value."""
+        self._click_upload()
+        init = self.hass.config_entries.flow.flow_inits[0]
+        self.assertEqual(init["context"]["source"], "reconfigure")
+
+    def test_flow_context_carries_the_entry_id(self):
+        """Without it the flow cannot find the display to push to."""
+        self._click_upload()
+        init = self.hass.config_entries.flow.flow_inits[0]
+        self.assertEqual(init["context"]["entry_id"], self.entry.entry_id)
+
+    def test_flow_source_matches_the_step_that_exists(self):
+        """The source must route to a real step, or the click does nothing.
+
+        Home Assistant dispatches on the source; `async_step_reconfigure` is
+        the step that has to be present to receive it.
         """
         config_flow = _mjloader.load_module("config_flow")
-        entity = self._make()
-        asyncio.run(entity.async_select_option(self.const.UPLOAD_OPTION))
-        flow = self.state["flows_started"][0]
-        step = f"async_step_{flow['handler_key']}"
+        self._click_upload()
+        init = self.hass.config_entries.flow.flow_inits[0]
+        step = f"async_step_{init['context']['source']}"
         self.assertTrue(
-            hasattr(config_flow.MojipicRepairFlow, step),
-            f"{config_flow.MojipicRepairFlow.__name__} has no {step}, so the "
-            f"flow for handler key {flow['handler_key']!r} is unreachable",
+            hasattr(config_flow.MojipicConfigFlow, step),
+            f"MojipicConfigFlow has no {step}, so a flow started with source "
+            f"{init['context']['source']!r} has nothing to handle it",
+        )
+
+    def test_config_flow_owns_the_reconfigure_step(self):
+        config_flow = _mjloader.load_module("config_flow")
+        self.assertTrue(hasattr(config_flow.MojipicConfigFlow, "async_step_reconfigure"))
+
+    def test_no_repairs_flow_remains(self):
+        """The unreachable repairs flow is gone and must not come back."""
+        config_flow = _mjloader.load_module("config_flow")
+        self.assertFalse(
+            hasattr(config_flow, "MojipicRepairFlow"),
+            "the repairs flow was unreachable and used non-existent APIs",
         )
 
     def test_selecting_upload_does_not_push_an_image(self):
         """It is a side action, not a selection."""
-        entity = self._make()
-        asyncio.run(entity.async_select_option(self.const.UPLOAD_OPTION))
+        self._click_upload()
         self.assertEqual(self.coordinator.displayed, [])
+
+    def test_selecting_upload_does_not_change_the_selection(self):
+        entity = self._make()
+
+        async def go():
+            await entity.async_select_option(self.const.UPLOAD_OPTION)
+            for coro in self.hass.created:
+                await coro
+
+        asyncio.run(go())
+        self.assertNotEqual(entity.current_option, self.const.UPLOAD_OPTION)
 
 
 class StoredImageSelectionTest(unittest.TestCase):
@@ -274,10 +326,11 @@ class StoredImageSelectionTest(unittest.TestCase):
         asyncio.run(entity.async_select_option("1"))
         self.assertEqual(entity.current_option, "1")
 
-    def test_selecting_upload_does_not_become_the_current_option(self):
-        entity = self._make()
-        asyncio.run(entity.async_select_option(self.const.UPLOAD_OPTION))
-        self.assertNotEqual(entity.current_option, self.const.UPLOAD_OPTION)
+    def tearDown(self):
+        while self.hass.created:
+            close = getattr(self.hass.created.pop(), "close", None)
+            if close is not None:
+                close()
 
 
 if __name__ == "__main__":

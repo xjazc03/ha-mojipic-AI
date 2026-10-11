@@ -98,11 +98,6 @@ ATTR_PACKETS_SENT = "packets_sent"
 # flow with a file picker, so images can be added without writing YAML.
 UPLOAD_OPTION = "\u2b06 Upload image\u2026"
 
-# Repair issue used to surface that flow. Repairs are the documented way for an
-# entity to open a flow that needs input.
-ISSUE_UPLOAD_IMAGE = "upload_image"
-ISSUE_RECONNECT = "reconnect"
-
 # Where Home Assistant may have put an uploaded file, relative to config_dir.
 # A file *picked* from the config directory comes back as a relative path; a
 # file *uploaded* through the picker comes back as a UUID.
