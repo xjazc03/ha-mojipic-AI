@@ -188,7 +188,27 @@ class HomeAssistantBluetoothTransport(MojipicTransport):
             return address
 
         # 2. Subscribe to advertisements for the remainder of the window.
-        def _on_service_info(service_info) -> None:
+        #
+        # The callback MUST accept two arguments. Home Assistant's type alias
+        # is verbatim:
+        #
+        #     type BluetoothCallback = Callable[
+        #         [BluetoothServiceInfoBleak, BluetoothChange], None
+        #     ]
+        #
+        # and the manager invokes it as `callback(service_info,
+        # BluetoothChange.ADVERTISEMENT)`. A one-argument callback raises on
+        # the very first replayed advertisement:
+        #
+        #     Error in bluetooth callback
+        #     TypeError: ..._on_service_info() takes 1 positional argument
+        #                but 2 were given
+        #
+        # which Home Assistant logs from
+        # components/bluetooth/manager.py:_async_replay_history_for_callback.
+        # Discovery then never finds anything, and the error surfaces as
+        # "could not discover the display" rather than as an arity problem.
+        def _on_service_info(service_info, change=None) -> None:
             _consider(
                 getattr(service_info, "address", None),
                 getattr(service_info, "name", None),

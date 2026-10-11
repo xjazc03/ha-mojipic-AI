@@ -264,6 +264,115 @@ class TestBackgroundTaskContract(unittest.TestCase):
 
 
 @requires_ha
+class TestBluetoothCallbackContract(unittest.TestCase):
+    """Bug 7, found from the owner's log after v1.1.7 failed.
+
+        Error in bluetooth callback
+        TypeError: HomeAssistantBluetoothTransport.async_discover.<locals>
+                   ._on_service_info() takes 1 positional argument but 2
+                   were given
+
+    Home Assistant's callback alias takes two arguments:
+
+        type BluetoothCallback = Callable[
+            [BluetoothServiceInfoBleak, BluetoothChange], None
+        ]
+
+    and manager.py calls `callback(service_info, BluetoothChange.ADVERTISEMENT)`.
+    """
+
+    def test_callback_alias_takes_two_arguments(self):
+        from homeassistant.components.bluetooth.models import BluetoothCallback
+
+        # It is a PEP 695 `type X = ...` alias, so the Callable lives on
+        # __value__ rather than being the object itself.
+        import typing
+        target = getattr(BluetoothCallback, "__value__", BluetoothCallback)
+        args = typing.get_args(target)
+        # Callable[[A, B], None] yields ([A, B], None); a bare alias yields (A, B).
+        params = args[0] if args and isinstance(args[0], list) else args
+        self.assertEqual(
+            len(params),
+            2,
+            f"BluetoothCallback resolved to {target!r}. The callback passed "
+            "to async_register_callback must accept the same number of "
+            "positional arguments.",
+        )
+
+    def test_manager_invokes_the_callback_with_two_arguments(self):
+        """Assert against the real manager source, not from memory."""
+        from homeassistant.components.bluetooth import manager
+
+        # Read the file rather than inspect.getsource: the manager class is
+        # compiled/generated in places, and getsource raises
+        # "source code not available".
+        src = pathlib.Path(manager.__file__).read_text()
+        self.assertIn(
+            "callback(service_info, BluetoothChange.ADVERTISEMENT)",
+            src,
+            "the manager passes two positional arguments; a one-argument "
+            "callback raises TypeError and discovery silently finds nothing",
+        )
+
+    def test_register_callback_signature(self):
+        """match_dict then mode, both positional-or-keyword, in that order."""
+        from homeassistant.components.bluetooth import (
+            async_register_callback,
+        )
+
+        params = list(inspect.signature(async_register_callback).parameters)
+        self.assertEqual(
+            params[:4], ["hass", "callback", "match_dict", "mode"],
+            "passing mode into the match_dict slot silently disables the "
+            "subscription",
+        )
+
+    def test_discovered_service_info_signature(self):
+        from homeassistant.components.bluetooth import (
+            async_discovered_service_info,
+        )
+
+        params = inspect.signature(async_discovered_service_info).parameters
+        self.assertEqual(list(params), ["hass", "connectable"])
+        self.assertFalse(
+            inspect.iscoroutinefunction(async_discovered_service_info),
+            "this is synchronous; awaiting it is a bug",
+        )
+
+    def test_ble_device_lookup_is_synchronous(self):
+        from homeassistant.components.bluetooth import (
+            async_ble_device_from_address,
+        )
+
+        self.assertFalse(
+            inspect.iscoroutinefunction(async_ble_device_from_address),
+            "despite the name this is synchronous and returns a BLEDevice, "
+            "not a client; awaiting it and calling write_gatt_char was a bug",
+        )
+
+    def test_our_callback_accepts_two_arguments(self):
+        """The actual assertion that matters, against this repo's code."""
+        import ast
+        from pathlib import Path
+
+        pkg = Path(__file__).resolve().parents[1] / "custom_components" / "mojipic"
+        tree = ast.parse((pkg / "transport.py").read_text())
+        fns = [
+            n for n in ast.walk(tree)
+            if isinstance(n, ast.FunctionDef) and n.name == "_on_service_info"
+        ]
+        self.assertTrue(fns, "no _on_service_info callback found in transport.py")
+        for fn in fns:
+            args = [a.arg for a in fn.args.args]
+            self.assertGreaterEqual(
+                len(args), 2,
+                f"_on_service_info({', '.join(args)}) takes {len(args)} "
+                "argument(s); Home Assistant passes "
+                "(service_info, BluetoothChange.ADVERTISEMENT)",
+            )
+
+
+@requires_ha
 class TestReconfigureFlowAPI(unittest.TestCase):
     """The path the 'Upload image...' option depends on."""
 
