@@ -55,12 +55,21 @@ def _load_coordinator():
     dispatcher.async_dispatcher_send = lambda *a, **k: None
     event = types.ModuleType("homeassistant.helpers.event")
     event.async_track_time_interval = lambda *a, **k: (lambda: None)
+    util = types.ModuleType("homeassistant.util")
+    dt = types.ModuleType("homeassistant.util.dt")
+    import datetime as _datetime
+
+    dt.timedelta = _datetime.timedelta
+    dt.utcnow = lambda: _datetime.datetime.now(_datetime.timezone.utc)
+    util.dt = dt
 
     sys.modules.setdefault("homeassistant", stub)
     sys.modules["homeassistant.core"] = core
     sys.modules["homeassistant.helpers"] = types.ModuleType("homeassistant.helpers")
     sys.modules["homeassistant.helpers.dispatcher"] = dispatcher
     sys.modules["homeassistant.helpers.event"] = event
+    sys.modules["homeassistant.util"] = util
+    sys.modules["homeassistant.util.dt"] = dt
     return _mjloader.load_module("coordinator")
 
 

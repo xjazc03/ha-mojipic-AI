@@ -178,9 +178,32 @@ class HomeAssistantBluetoothTransport(MojipicTransport):
             _LOGGER.debug("Could not resolve BLEDevice for %s: %s", address, err)
 
         timeout = max(MIN_CONNECT_TIMEOUT, CONNECT_TIMEOUT)
+
+        # Home Assistant logs a warning if BleakClient.connect() is used
+        # directly: "called without bleak-retry-connector. For reliable
+        # connection establishment, use establish_connection()".
+        #
+        # A BLE link to a small battery-backed display is exactly the case
+        # that needs retries: BlueZ must resolve services on first contact and
+        # transient failures are common.
         client = BleakClient(ble_device or address, timeout=timeout)
         try:
-            await client.connect()
+            try:
+                from bleak_retry_connector import establish_connection
+
+                client = await establish_connection(
+                    BleakClient,
+                    ble_device if ble_device is not None else address,
+                    self._address or address,
+                    timeout=timeout,
+                )
+            except ImportError:
+                # bleak-retry-connector is a Home Assistant dependency, but
+                # fall back rather than fail outright if it is unavailable.
+                _LOGGER.debug(
+                    "bleak_retry_connector unavailable; using direct connect"
+                )
+                await client.connect()
         except Exception as err:  # noqa: BLE001
             with contextlib.suppress(Exception):
                 await client.disconnect()

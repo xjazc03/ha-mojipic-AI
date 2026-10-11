@@ -76,16 +76,37 @@ class TestManifestDependencies(unittest.TestCase):
         )
 
     def test_bleak_is_not_a_requirement(self):
-        """This integration uses Home Assistant's Bluetooth stack, not bleak.
+        """The integration must not depend on bleak itself.
 
-        Declaring bleak would drag in a dependency the code never uses, and
-        would need its own wheels on every host.
+        It reaches Bluetooth through Home Assistant's own ``bluetooth``
+        component, which brings bleak along transitively. Depending on bleak
+        directly would drag a second, competing Bluetooth stack onto the host.
+
+        ``bleak-retry-connector`` is a different package and *is* required --
+        Home Assistant asks integrations to use it for reliable connects.
         """
-        names = [r.lower() for r in _requirements()]
-        self.assertFalse(
-            any(n.startswith("bleak") for n in names),
+        names = [
+            re.split(r"[<>=!~\[; ]", r, maxsplit=1)[0].strip().lower()
+            for r in _requirements()
+        ]
+        self.assertNotIn(
+            "bleak",
+            names,
             "bleak must not be a requirement; transport.py uses Home "
             "Assistant's own bluetooth component",
+        )
+
+    def test_bleak_retry_connector_is_required(self):
+        """HA logs a warning when BleakClient.connect() is used directly."""
+        names = [
+            re.split(r"[<>=!~\[; ]", r, maxsplit=1)[0].strip().lower()
+            for r in _requirements()
+        ]
+        self.assertIn(
+            "bleak-retry-connector",
+            names,
+            "establish_connection() from bleak-retry-connector is required; "
+            "Home Assistant logs a warning for a bare BleakClient.connect()",
         )
 
     def test_version_is_semver(self):

@@ -29,6 +29,7 @@ from typing import Any, Callable, Optional
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.util import dt as dt_util
 
 from .const import (
     CHAR_BATTERY_LEVEL,
@@ -156,7 +157,13 @@ class MojipicCoordinator:
         self._ensure_worker()
         await self._async_ensure_connected()
         self._unsub_interval = async_track_time_interval(
-            self.hass, self._async_health_tick, HEALTH_INTERVAL
+            self.hass,
+            self._async_health_tick,
+            # async_track_time_interval requires a datetime.timedelta, not a
+            # number of seconds. Passing a float raises
+            # "AttributeError: 'float' object has no attribute 'total_seconds'"
+            # and takes down the whole config entry setup.
+            dt_util.timedelta(seconds=HEALTH_INTERVAL),
         )
 
     async def async_stop(self) -> None:

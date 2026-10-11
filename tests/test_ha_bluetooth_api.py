@@ -140,3 +140,48 @@ class TestHomeAssistantApiUsage(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestHomeAssistantTimerApi(unittest.TestCase):
+    """Home Assistant timer helpers require timedelta, not seconds.
+
+    `async_track_time_interval` calls `interval.total_seconds()`. Passing a
+    float raises
+
+        AttributeError: 'float' object has no attribute 'total_seconds'
+
+    which aborted config entry setup entirely -- the integration never got as
+    far as connecting. Found only on a real host.
+    """
+
+    def _source(self, name: str) -> str:
+        from _mjloader import PKG_PATH
+
+        return (PKG_PATH / f"{name}.py").read_text()
+
+    def test_health_interval_is_wrapped_in_timedelta(self):
+        source = self._source("coordinator")
+        self.assertIn(
+            "dt_util.timedelta(seconds=HEALTH_INTERVAL)",
+            source,
+            "async_track_time_interval needs a timedelta; a bare float raises "
+            "AttributeError and fails config entry setup",
+        )
+
+    def test_select_refresh_interval_is_wrapped_in_timedelta(self):
+        """select.py uses async_track_time_interval too."""
+        import sys
+        from pathlib import Path
+
+        path = Path(__file__).resolve().parents[1] / "custom_components/mojipic/select.py"
+        source = path.read_text()
+        if "async_track_time_interval" not in source:
+            self.skipTest("select.py no longer schedules a timer")
+        self.assertIn(
+            "dt_util.timedelta",
+            source,
+            "async_track_time_interval needs a timedelta, not seconds",
+        )
+        self.assertIn(
+            "from homeassistant.util import dt as dt_util", source
+        )
