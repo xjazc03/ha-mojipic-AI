@@ -97,6 +97,8 @@ ATTR_PACKETS_SENT = "packets_sent"
 # Leading entry in the select entity's option list. Selecting it opens a repair
 # flow with a file picker, so images can be added without writing YAML.
 UPLOAD_OPTION = "\u2b06 Upload image\u2026"
+TEST_PATTERN_OPTION = "\u2b05 Test pattern"
+URL_DOWNLOAD_OPTION = "\u2b07 Download from URL\u2026"
 
 # Where Home Assistant's file selector actually puts what the user picks.
 #

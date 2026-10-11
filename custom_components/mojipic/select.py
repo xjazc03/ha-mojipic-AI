@@ -19,11 +19,15 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_time_interval
 
+from pathlib import Path
+
 from .const import (
     CONF_NAME,
     DEFAULT_NAME_PREFIX,
     DOMAIN,
     UPLOAD_OPTION,
+    TEST_PATTERN_OPTION,
+    URL_DOWNLOAD_OPTION,
 )
 from .image_encode import ImageConversionError
 
@@ -118,7 +122,7 @@ class MojipicImageSelect(SelectEntity):
         """Pick up newly uploaded images without a restart."""
         entries = await self.manager.async_list()
         # The upload entry always sorts first so it is where the eye lands.
-        options = [UPLOAD_OPTION] + [str(item["id"]) for item in entries]
+        options = [UPLOAD_OPTION, TEST_PATTERN_OPTION, URL_DOWNLOAD_OPTION] + [str(item["id"]) for item in entries]
         if options != self._options:
             self._options = options
             if self._current and self._current not in options:
@@ -148,6 +152,14 @@ class MojipicImageSelect(SelectEntity):
         """Push the chosen image, or open the upload flow."""
         if option == UPLOAD_OPTION:
             self._async_open_upload_flow()
+            return
+
+        if option == TEST_PATTERN_OPTION:
+            await self._async_push_test_pattern()
+            return
+
+        if option == URL_DOWNLOAD_OPTION:
+            self._async_open_url_flow()
             return
 
         try:
@@ -230,3 +242,49 @@ class MojipicImageSelect(SelectEntity):
         # Uploading is a side action, not a selection, so put the dropdown back
         # to whatever it was showing.
         self.async_write_ha_state()
+
+    async def _async_push_test_pattern(self) -> None:
+        """Generate and display a static black/white checkerboard."""
+        from PIL import Image
+        from .image_encode import encode_framebuffer
+        size = 32
+        img = Image.new("RGB", (size, size), "black")
+        pixels = img.load()
+        for y in range(size):
+            for x in range(size):
+                if (x // 4 + y // 4) % 2 == 0:
+                    pixels[x, y] = (255, 255, 255)
+        framebuffer = encode_framebuffer(img, enhance_image=False)
+        result = await self.coordinator.async_display(
+            framebuffer, -1  # -1 = test pattern slot
+        )
+        if result.outcome.ok:
+            self._current = TEST_PATTERN_OPTION
+            self.async_write_ha_state()
+
+    async def _async_open_url_flow(self) -> None:
+        """Download from any user-provided URL via config file."""
+        url_path = Path(self.hass.config.config_dir) / "mojipic" / "url_source.txt"
+        try:
+            url = url_path.read_text(encoding="utf-8").strip()
+        except Exception:
+            url = ""
+        if not url:
+            url_path.parent.mkdir(parents=True, exist_ok=True)
+            url_path.write_text("https://picsum.photos/32/32?random=1\n", encoding="utf-8")
+            url = url_path.read_text(encoding="utf-8").strip()
+            _LOGGER.info("Created %s; edit it with any image URL, then re-select 'Download from URL'", url_path)
+        try:
+            from urllib.request import urlopen
+            data = await self.hass.async_add_executor_job(lambda: urlopen(url, timeout=10).read())
+            raw = bytes(data)
+            stored = await self.manager.async_upload(raw, "url_download.png")
+            framebuffer = await self.manager.async_framebuffer(stored["id"])
+            if framebuffer is not None:
+                result = await self.coordinator.async_display(framebuffer, stored["id"])
+                if result.outcome.ok:
+                    self._current = str(stored["id"])
+                    self.async_write_ha_state()
+                    _LOGGER.info("Downloaded from %s -> id=%s", url, stored["id"])
+        except Exception as err:
+            _LOGGER.error("URL download failed from %s: %s", url, err)

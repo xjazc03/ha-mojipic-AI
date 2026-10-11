@@ -259,13 +259,17 @@ class TestUploadOption(unittest.TestCase):
             Path(config_flow.__file__).parent / "select.py"
         ).read_text()
         self.assertIn(
-            "options = [UPLOAD_OPTION] + [str(item[\"id\"]) for item in entries]",
+            "options = [UPLOAD_OPTION, TEST_PATTERN_OPTION, URL_DOWNLOAD_OPTION] + [str(item[\"id\"]) for item in entries]",
             source,
             "the upload entry must be offered in the dropdown",
         )
         self.assertIn(
             "if option == UPLOAD_OPTION:", source,
             "selecting the upload entry must open the upload flow",
+        )
+        self.assertIn(
+            "TEST_PATTERN_OPTION", source,
+            "test pattern entry must be offered",
         )
 
 

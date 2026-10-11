@@ -137,7 +137,13 @@ class SelectPlatformTest(unittest.TestCase):
         added = self._run_setup()
         self.assertEqual(
             added[0].options,
-            [self.const.UPLOAD_OPTION, "0", "1"],
+            [
+                self.const.UPLOAD_OPTION,
+                self.const.TEST_PATTERN_OPTION,
+                self.const.URL_DOWNLOAD_OPTION,
+                "0",
+                "1",
+            ],
         )
 
     def test_upload_option_is_first(self):
