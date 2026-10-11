@@ -27,8 +27,23 @@ class MojipicImage(ImageEntity):
     _attr_translation_key = "image"
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry, bundle) -> None:
-        super().__init__()
-        self.hass = hass
+        # `hass` is a REQUIRED positional argument. This is not a recent Core
+        # change: `ImageEntity.__init__(self, hass, verify_ssl=False)` has
+        # required it since well before 2024.10. v1.1.2 added a bare
+        # `super().__init__()` here, which raised
+        #
+        #   TypeError: ImageEntity.__init__() missing 1 required positional
+        #              argument: 'hass'
+        #
+        # at every setup, killing the image platform and -- because the
+        # setup cleanup then removed hass.data[DOMAIN][entry_id] -- the
+        # upload flow as well.
+        #
+        # SelectEntity and SensorEntity declare no `__init__` at all, so a
+        # bare `super().__init__()` is correct in those two. Do not copy this
+        # pattern across blindly; tests/test_ha_api.py pins all three.
+        super().__init__(hass)
+        # `hass` is owned by the base class from here on.
         self.entry = entry
         self.coordinator = bundle["coordinator"]
         self.manager = bundle["manager"]

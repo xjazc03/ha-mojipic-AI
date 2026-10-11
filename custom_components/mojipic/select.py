@@ -51,7 +51,7 @@ async def async_setup_entry(
     entry.async_on_unload(
         async_track_time_interval(
             hass,
-            entity.async_refresh_options_hack,
+            entity.async_options_tick,
             # Must be the stdlib datetime.timedelta:
             # async_track_time_interval calls interval.total_seconds(), and
             # homeassistant.util.dt does not export a timedelta.
@@ -97,7 +97,14 @@ class MojipicImageSelect(SelectEntity):
             )
         )
 
-    async def async_refresh_options_hack(self, _now=None) -> None:
+    async def async_options_tick(self, _now=None) -> None:
+        """Timer callback: re-read the option list.
+
+        Not dead code, despite looking unused -- this is the periodic refresh
+        handler registered with async_track_time_interval. It takes `_now`
+        because that is the signature the timer calls it with, and drops it
+        because the refresh needs nothing but hass.
+        """
         await self.async_refresh_options()
 
     @callback

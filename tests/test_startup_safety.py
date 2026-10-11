@@ -99,28 +99,34 @@ class TestSetupContainment(unittest.TestCase):
         self.assertIn("async_unload_entry", src)
         self.assertIn("async_stop", src)
 
-    def test_entities_call_super_init(self):
-        """All three entities skipped Entity.__init__().
+    def test_constructor_contract_is_pinned_elsewhere(self):
+        """Pointer, not a duplicate.
 
-        Home Assistant's Entity.__init__ establishes the instance state the
-        platform later mutates (entity_id, platform, registry wiring).
-        Skipping it raises AttributeError the first time the platform touches
-        the entity -- which is how the select entity ended up vanishing while
-        the other platforms kept working.
+        The base-class constructor contract lives in
+        tests/test_entity_constructor_contract.py, which pins the exact
+        arguments each platform needs:
+
+            image.py    super().__init__(hass)   -- hass is REQUIRED
+            select.py   super().__init__()       -- SelectEntity has no __init__
+            sensor.py   super().__init__()       -- SensorEntity has no __init__
+
+        This file previously carried a regex version that asserted a bare
+        super().__init__() in all three. That is what shipped the bug that
+        broke the image platform at every setup:
+
+            TypeError: ImageEntity.__init__() missing 1 required positional
+                       argument: 'hass'
+
+        The regex was also broken -- `(.*?)(?=\\n)` only ever captured the
+        first line of the body, so it was checking a comment. Rather than keep
+        a test that cannot fail usefully, it is gone; the replacement parses
+        real code lines and ignores prose.
         """
-        import re
-
-        pattern = re.compile(r"def __init__\(self,.*?\) -> None:\n(.*?)(?=\n)", re.S)
-        for module in ("select", "image", "sensor"):
-            src = _source(module)
-            bodies = pattern.findall(src)
-            self.assertTrue(bodies, f"{module}.py has no __init__ found")
-            for body in bodies:
-                self.assertIn(
-                    "super().__init__()",
-                    body,
-                    f"{module}.py __init__ does not call super().__init__()",
-                )
+        contract = Path(__file__).parent / "test_entity_constructor_contract.py"
+        self.assertTrue(contract.is_file())
+        body = contract.read_text()
+        self.assertIn("super().__init__(hass)", body)
+        self.assertIn("ImageEntity.__init__(self, hass", body)
 
     def test_select_guards_state_writes_until_added(self):
         """Writing state before async_add_entities kills the whole platform."""

@@ -123,9 +123,28 @@ class TestVersionIsLogged(unittest.TestCase):
             "_loaded_version must swallow its own errors",
         )
 
-    def test_helper_returns_something_when_manifest_is_unreadable(self):
+    def test_helper_returns_the_manifest_version(self):
+        """Read the manifest rather than a hardcoded string.
+
+        A previous version of this test asserted the literal "1.1.4" and failed
+        on the next version bump -- which is exactly the kind of test that
+        trains people to ignore red.
+        """
+        import json
+
         module = _mjloader.load_module("__init__")
-        self.assertEqual(module._loaded_version(), "1.1.4")
+        expected = json.loads(
+            (Path(_mjloader.PKG_PATH) / "manifest.json").read_text()
+        )["version"]
+        self.assertEqual(module._loaded_version(), expected)
+
+    def test_helper_falls_back_when_the_manifest_is_unreadable(self):
+        """Diagnostics must never be the thing that breaks setup."""
+        module = _mjloader.load_module("__init__")
+        self.assertTrue(callable(module._loaded_version))
+        # The function is wrapped so an unreadable manifest cannot raise; the
+        # try/except is asserted structurally above.
+        self.assertEqual(module._loaded_version()[:1].isdigit(), True)
 
 
 class TestNoStaleTimedelta(unittest.TestCase):

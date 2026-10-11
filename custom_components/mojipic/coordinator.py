@@ -134,6 +134,9 @@ class MojipicCoordinator:
         self._connected = False
         self._in_flight: Optional[_Pending] = None
         self._worker: Optional[asyncio.Task] = None
+        # Signalled when a push is queued or when stopping, so the worker can
+        # park instead of polling. See _async_worker.
+        self._push_wakeup = asyncio.Event()
         self._reconnect_task: Optional[asyncio.Task] = None
         self._unsub_interval = None
         self._running = False
@@ -189,6 +192,8 @@ class MojipicCoordinator:
 
     async def async_stop(self) -> None:
         self._running = False
+        # Wake the parked worker so it observes `_running` immediately.
+        self._push_wakeup.set()
         if self._unsub_interval:
             self._unsub_interval()
             self._unsub_interval = None
@@ -341,6 +346,7 @@ class MojipicCoordinator:
 
         previous = self._in_flight
         self._in_flight = pending
+        self._push_wakeup.set()
 
         if previous is not None and previous.future and not previous.future.done():
             _LOGGER.debug(
@@ -378,11 +384,26 @@ class MojipicCoordinator:
             self.stats["sent"] += 1
 
     async def _async_worker(self) -> None:
-        """Single-in-flight worker: never more than one transfer at a time."""
+        """Single-in-flight worker: never more than one transfer at a time.
+
+        Idle, the worker parks on an event instead of polling. A 20 ms sleep
+        loop kept the task alive across shutdown -- Home Assistant logged
+
+            Task<MojipicCoordinator._async_worker()> was still running after
+            final writes shutdown stage
+
+        and it contributed directly to slow restarts. Parking means zero
+        wakeups when there is nothing to send, and `async_stop` wakes it so
+        cancellation takes effect immediately.
+        """
         while self._running:
             current = self._in_flight
             if current is None:
-                await asyncio.sleep(0.02)
+                self._push_wakeup.clear()
+                # Re-check under the same tick: a push may have been queued
+                # between the read above and the clear() above.
+                if self._in_flight is None and self._running:
+                    await self._push_wakeup.wait()
                 continue
             if current.future and current.future.done():
                 if self._in_flight is current:
