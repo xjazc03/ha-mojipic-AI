@@ -51,8 +51,21 @@ The point is **event → image**. The rest is supporting cast.
 
 ### Manual
 
-Copy `integrations/mojipic/` into your Home Assistant `config/custom_components/mojipic/`
-and restart.
+Copy the **contents** of `custom_components/mojipic/` into your Home Assistant
+`config/custom_components/mojipic/`, then restart:
+
+```bash
+# target does not exist yet
+cp -r custom_components/mojipic <ha-config>/custom_components/
+
+# target already exists — note the /. so contents are copied, not the directory
+mkdir -p <ha-config>/custom_components/mojipic
+cp -r custom_components/mojipic/. <ha-config>/custom_components/mojipic/
+```
+
+Result must be `<ha-config>/custom_components/mojipic/manifest.json`. If you end up
+with `custom_components/mojipic/mojipic/`, the copy was wrong and the integration
+will not load.
 
 ---
 
@@ -104,7 +117,7 @@ Or pick an image straight from a dashboard using the **MojiPic card** (below), o
 
 ## Lovelace card
 
-Copy `integrations/mojipic/panel/mojipic-card.js` to `config/www/mojipic-card.js`, then
+Copy `custom_components/mojipic/panel/mojipic-card.js` to `config/www/mojipic-card.js`, then
 add as a dashboard resource:
 
 ```yaml

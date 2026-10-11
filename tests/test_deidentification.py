@@ -33,7 +33,7 @@ _INTERNAL_IDENTIFIERS = (
 # Files allowed to contain an identifier, with the reason.
 # The owner handle must appear in exactly two places, both required by HACS.
 _ALLOWED: dict[str, str] = {
-    "integrations/mojipic/manifest.json": (
+    "custom_components/mojipic/manifest.json": (
         "codeowners must be a real GitHub handle, and the documentation and "
         "issue_tracker URLs point at the repository. This is the correct and "
         "only place the owner's handle belongs."
@@ -124,7 +124,7 @@ class TestWholeTreeDeidentification(unittest.TestCase):
 
     def test_allowed_file_actually_needs_its_exemption(self):
         """Guard against the exemption list silently becoming unnecessary."""
-        path = REPO_ROOT / "integrations/mojipic/manifest.json"
+        path = REPO_ROOT / "custom_components/mojipic/manifest.json"
         self.assertTrue(
             path.exists(),
             "manifest.json is missing; the _ALLOWED exemption may be stale",
@@ -153,7 +153,7 @@ class TestWholeTreeDeidentification(unittest.TestCase):
                     text = bundle.read(name).decode("utf-8")
                 except UnicodeDecodeError:
                     continue
-                rel = name.replace("mojipic/", "integrations/mojipic/", 1)
+                rel = name.replace("mojipic/", "custom_components/mojipic/", 1)
                 for lineno, identifier, matched in scan_text(text):
                     if rel in _ALLOWED:
                         continue
@@ -171,3 +171,59 @@ class TestWholeTreeDeidentification(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestRepositoryStructure(unittest.TestCase):
+    """Guard the layout HACS actually validates.
+
+    HACS requires the integration at `custom_components/<domain>/` -- NOT
+    `integrations/<domain>/`, which is Home Assistant Core's own monorepo
+    layout. Getting this wrong makes HACS reject the repository with
+    "Repository structure ... is not compliant", and the failure only shows
+    up in HACS, not in the test suite.
+    """
+
+    def test_integration_lives_under_custom_components(self):
+        integration_dir = REPO_ROOT / "custom_components" / "mojipic"
+        self.assertTrue(
+            integration_dir.is_dir(),
+            "expected custom_components/mojipic/ -- HACS will reject the "
+            "repository without it",
+        )
+        self.assertTrue(
+            (integration_dir / "manifest.json").is_file(),
+            "manifest.json must sit inside custom_components/mojipic/",
+        )
+
+    def test_exactly_one_integration_in_custom_components(self):
+        entries = [p for p in (REPO_ROOT / "custom_components").iterdir() if p.is_dir()]
+        self.assertEqual(
+            len(entries), 1,
+            f"HACS manages one integration per repo; found {[p.name for p in entries]}",
+        )
+
+    def test_no_integrations_directory(self):
+        """`integrations/` is Core's layout, not HACS's. Its presence is a bug."""
+        self.assertFalse(
+            (REPO_ROOT / "integrations").exists(),
+            "integrations/ is not the HACS layout; the integration must live "
+            "under custom_components/",
+        )
+
+    def test_manifest_has_required_keys(self):
+        import json
+
+        manifest = json.loads(
+            (REPO_ROOT / "custom_components/mojipic/manifest.json").read_text()
+        )
+        for key in ("domain", "documentation", "issue_tracker", "codeowners",
+                    "name", "version"):
+            self.assertIn(key, manifest, f"manifest.json is missing {key!r}")
+        self.assertEqual(manifest["domain"], "mojipic")
+
+    def test_hacs_json_present_and_parses(self):
+        import json
+
+        hacs = json.loads((REPO_ROOT / ".hacs.json").read_text())
+        for key in ("name", "render_readme", "content_in_root", "homeassistant"):
+            self.assertIn(key, hacs, f".hacs.json is missing {key!r}")

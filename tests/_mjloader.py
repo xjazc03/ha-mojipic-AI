@@ -10,12 +10,12 @@ import sys
 import types
 from pathlib import Path
 
-PKG_PATH = Path(__file__).resolve().parents[1] / "integrations" / "mojipic"
+PKG_PATH = Path(__file__).resolve().parents[1] / "custom_components" / "mojipic"
 STUB_NAME = "mjpkg"
 
 
 def load_module(name: str):
-    """Load integrations/mojipic/<name>.py as `mjpkg.<name>`."""
+    """Load custom_components/mojipic/<name>.py as `mjpkg.<name>`."""
     if STUB_NAME not in sys.modules:
         stub = types.ModuleType(STUB_NAME)
         stub.__path__ = [str(PKG_PATH)]
