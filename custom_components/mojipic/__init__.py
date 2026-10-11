@@ -111,6 +111,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         packets_for_framebuffer=_packets_for_framebuffer,
     )
     manager = ImageManager(hass)
+    await manager.async_load()  # ensures dirs + manifest exist
+    manager._ensure_dirs()      # guarantee storage directories
+
+    # Ensure test-pattern option data is present (pre-creates helper slot reference)
+    # and create url_source.txt if missing so download option works out of box.
+    url_path = Path(hass.config.config_dir) / "mojipic" / "url_source.txt"
+    if not url_path.exists():
+        url_path.parent.mkdir(parents=True, exist_ok=True)
+        url_path.write_text("https://picsum.photos/32/32?random=1\n", encoding="utf-8")
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
         "coordinator": coordinator,
