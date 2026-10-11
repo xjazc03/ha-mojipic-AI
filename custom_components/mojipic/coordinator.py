@@ -24,12 +24,12 @@ import enum
 import logging
 import time
 from dataclasses import dataclass, field
+from datetime import timedelta
 from typing import Any, Callable, Optional
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_track_time_interval
-from homeassistant.util import dt as dt_util
 
 from .const import (
     CHAR_BATTERY_LEVEL,
@@ -159,11 +159,17 @@ class MojipicCoordinator:
         self._unsub_interval = async_track_time_interval(
             self.hass,
             self._async_health_tick,
-            # async_track_time_interval requires a datetime.timedelta, not a
-            # number of seconds. Passing a float raises
-            # "AttributeError: 'float' object has no attribute 'total_seconds'"
-            # and takes down the whole config entry setup.
-            dt_util.timedelta(seconds=HEALTH_INTERVAL),
+            # async_track_time_interval requires a datetime.timedelta. Passing
+            # raw seconds raises "AttributeError: 'float' object has no
+            # attribute 'total_seconds'".
+            #
+            # It must be the *stdlib* timedelta. `homeassistant.util.dt` does
+            # not export one -- it imports datetime internally as `dt` and
+            # exposes utcnow/parse_datetime/etc, but no `timedelta` attribute.
+            # Using dt_util.timedelta fails at setup with
+            # "AttributeError: module 'homeassistant.util.dt' has no attribute
+            # 'timedelta'".
+            timedelta(seconds=HEALTH_INTERVAL),
         )
 
     async def async_stop(self) -> None:

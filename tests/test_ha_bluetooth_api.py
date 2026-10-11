@@ -182,11 +182,39 @@ class TestHomeAssistantTimerApi(unittest.TestCase):
     def test_health_interval_is_wrapped_in_timedelta(self):
         source = self._source("coordinator")
         self.assertIn(
-            "dt_util.timedelta(seconds=HEALTH_INTERVAL)",
+            "timedelta(seconds=HEALTH_INTERVAL)",
             source,
             "async_track_time_interval needs a timedelta; a bare float raises "
             "AttributeError and fails config entry setup",
         )
+
+    def test_timedelta_is_the_stdlib_one(self):
+        """`homeassistant.util.dt` does NOT export a timedelta.
+
+        It imports datetime internally as `dt` and exposes utcnow(),
+        parse_datetime() and friends, but `dt_util.timedelta` does not exist.
+        Using it fails at setup with:
+
+            AttributeError: module 'homeassistant.util.dt' has no attribute
+            'timedelta'
+
+        Both call sites must import timedelta from the standard library.
+        """
+        for module in ("coordinator", "select"):
+            source = self._source(module)
+            self.assertIn(
+                "from datetime import timedelta", source,
+                f"{module}.py must import timedelta from the standard library",
+            )
+            self.assertNotIn(
+                "dt_util.timedelta(", source,
+                f"{module}.py uses dt_util.timedelta, which does not exist on "
+                "homeassistant.util.dt",
+            )
+            self.assertNotIn(
+                "from homeassistant.util import dt as dt_util", source,
+                f"{module}.py imports dt_util but must not use it for timedelta",
+            )
 
     def test_select_refresh_interval_is_wrapped_in_timedelta(self):
         """select.py uses async_track_time_interval too."""
@@ -198,10 +226,8 @@ class TestHomeAssistantTimerApi(unittest.TestCase):
         if "async_track_time_interval" not in source:
             self.skipTest("select.py no longer schedules a timer")
         self.assertIn(
-            "dt_util.timedelta",
+            "timedelta(seconds=SCAN_INTERVAL_SECONDS)",
             source,
-            "async_track_time_interval needs a timedelta, not seconds",
+            "async_track_time_interval needs a stdlib timedelta, not seconds",
         )
-        self.assertIn(
-            "from homeassistant.util import dt as dt_util", source
-        )
+        self.assertIn("from datetime import timedelta", source)

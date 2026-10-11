@@ -7,6 +7,7 @@ the id of the displayed image; selecting one pushes it immediately.
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
@@ -15,7 +16,6 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import CONNECTION_BLUETOOTH, DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_time_interval
-from homeassistant.util import dt as dt_util
 
 from .const import CONF_NAME, DEFAULT_NAME_PREFIX, DOMAIN
 from .image_encode import ImageConversionError
@@ -37,9 +37,10 @@ async def async_setup_entry(
         async_track_time_interval(
             hass,
             entity.async_refresh_options_hack,
-            # Must be a timedelta: async_track_time_interval calls
-            # interval.total_seconds() and a bare float raises AttributeError.
-            dt_util.timedelta(seconds=SCAN_INTERVAL_SECONDS),
+            # Must be the stdlib datetime.timedelta:
+            # async_track_time_interval calls interval.total_seconds(), and
+            # homeassistant.util.dt does not export a timedelta.
+            timedelta(seconds=SCAN_INTERVAL_SECONDS),
         )
     )
 
