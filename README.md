@@ -11,30 +11,33 @@ at the door, anything you automate.
 
 ## What it does
 
-`mojipic.display_image` pushes any image to the panel. Images are resized to fit
-32×32 (letterboxed, not stretched) and encoded to the device's native RGB565 format.
+Upload images once, then display them on the panel from automations or straight from a
+dashboard. Images are cropped to fit 32×32, brightened, and encoded to the display's
+native RGB565 format.
 
-That's the whole point of this integration — **event → image**. The rest is
-supporting cast.
+The point is **event → image**. The rest is supporting cast.
+
+---
 
 ## Requirements
 
 - Home Assistant **2024.10.0** or newer
-- A MojiPic, powered on and within BLE range (~10 m) of the machine Home Assistant
-  is running on
-- **A Bluetooth adapter Home Assistant can reach.** Any of these work:
-  - a local Bluetooth adapter on the HA host (via a USB passthrough / add-on)
-  - an **ESPHome Bluetooth proxy** near the display (recommended — lets the HA
-    server sit anywhere)
+- A MojiPic, powered on and within Bluetooth range (~10 m)
+- **A Bluetooth adapter Home Assistant can reach:**
+  - a local adapter on the HA host
+  - an **ESPHome Bluetooth proxy** placed near the display — usually the most reliable
+    option, and it lets your HA server live anywhere
   - the built-in adapter, if your HA host exposes one
 
-> **Important:** MojiPic is BLE-only with no Wi-Fi or network interface. Home
-> Assistant cannot reach it over the network. Whatever pushes the image must be
-> physically within Bluetooth range of the display.
+> MojiPic is BLE-only. It has no Wi-Fi and no network interface, so Home Assistant
+> cannot reach it over the network. Whatever pushes the image must be physically
+> within Bluetooth range.
+
+---
 
 ## Installation
 
-### HACS (recommended)
+### HACS
 
 1. Add this repository as a custom repository of type *Integration*.
 2. Install **MojiPic**.
@@ -42,46 +45,38 @@ supporting cast.
 
 ### Manual
 
-Copy `custom_components/mojipic` into your Home Assistant `config/custom_components/`
-directory and restart.
+Copy `integrations/mojipic/` into your Home Assistant `config/custom_components/mojipic/`
+and restart.
 
-## Configuration
+---
+
+## Setup
 
 **Settings → Devices & Services → Add Integration → MojiPic**
 
-Enter the BLE address (`AA:BB:CC:DD:EE:FF`), or tick **Scan** and let Home Assistant
-find it for you. Not sure of the address? Open the MojiPic vendor app once — it
-lists the device. Or check the Home Assistant **Bluetooth** integration, which lists
-everything it can see.
+Leave **Scan for a MojiPic** ticked and Home Assistant will find it, or type the BLE
+address yourself (`AA:BB:CC:DD:EE:FF`). Don't know the address? Open the MojiPic vendor
+app once and look at the device list, or check the Home Assistant **Bluetooth**
+integration.
 
-## Usage
+### Uploading images
 
-### The main event
+Once added, the device page offers an **Upload image** action. Drop in a PNG or JPEG and
+it is stored under `config/mojipic/images/`, with a pre-converted framebuffer cached
+alongside it so displaying never re-encodes.
+
+You can also upload from an automation:
 
 ```yaml
-action: mojipic.display_image
+action: mojipic.upload_image
 data:
-  path: mojipic_images/doorbell.png
+  filename: doorbell.png
+  image_path: mojipic_images/doorbell.png
 ```
 
-### A realistic automation
+### Showing images
 
-Package left at the door → show a 📦:
-
-```yaml
-automation:
-  - alias: "MojiPic - package delivered"
-    triggers:
-      - trigger: state
-        entity_id: binary_sensor.front_door_package
-        to: "on"
-    actions:
-      - action: mojipic.display_image
-        data:
-          path: mojipic_images/package.png
-```
-
-Doorbell → show a bell:
+From an automation:
 
 ```yaml
 automation:
@@ -91,70 +86,75 @@ automation:
         entity_id: binary_sensor.front_door
         to: "on"
     actions:
-      - action: mojipic.display_image
+      - action: mojipic.display_stored
         data:
-          path: mojipic_images/doorbell.png
+          image_id: 0
 ```
 
-### Pulling an image from a camera at the moment of an event
+Or pick an image straight from a dashboard using the **MojiPic card** (below), or the
+`select` entity.
+
+---
+
+## Lovelace card
+
+Copy `integrations/mojipic/panel/mojipic-card.js` to `config/www/mojipic-card.js`, then
+add as a dashboard resource:
 
 ```yaml
-automation:
-  - alias: "MojiPic - who's at the door"
-    triggers:
-      - trigger: state
-        entity_id: binary_sensor.front_door
-        to: "on"
-    actions:
-      - action: mojipic.display_image
-        data:
-          url: "http://192.168.8.50:8123/api/camera_proxy/camera.front_door?width=320"
+url: /local/mojipic-card.js
+type: module
 ```
 
-Any non-square image is letterboxed to 32×32 automatically.
+```yaml
+type: custom:mojipic-card
+image_entity: image.mojipic_image
+select_entity: select.mojipic_image
+```
+
+---
 
 ## Services
 
 | Service | Description |
 |---|---|
-| `mojipic.display_image` | **Main service.** Push an image. Accepts `image` (a file/URL/image entity), `path`, or `url`. Optional `brightness`. |
-| `mojipic.set_brightness` | Set brightness, 0–100. |
+| `mojipic.upload_image` | Store an image. `image_data` (base64) or `image_path` + `filename`. |
+| `mojipic.display_stored` | Display a previously uploaded image by `image_id`. |
+| `mojipic.display_image` | Display a file directly, without storing it first. |
+| `mojipic.delete_image` | Remove a stored image. |
+| `mojipic.set_brightness` | Brightness, 0–100. |
+| `mojipic.clear_screen` | Clear to black. |
 | `mojipic.device_on` / `device_off` | Power the display on/off. |
 | `mojipic.screen_on` / `screen_off` | Wake / blank the panel. |
-| `mojipic.clear_screen` | Clear to black. |
+| `mojipic.rescan` | Look for the display again and update the remembered address. |
 
-If you have more than one MojiPic, pass `address:` to target a specific one.
+With more than one display, add `address:` to target a specific one.
 
 ## Entities
 
 | Entity | Type | Notes |
 |---|---|---|
-| `<name> image` | `image` | The last image pushed — handy for a dashboard or a glanceable history. |
-| `<name> battery` | `sensor` | Battery percentage, polled every 15 minutes. |
+| `<name> image` | `image` | The image currently on the display. |
+| `<name> image` | `select` | Choose which stored image to show. |
+| `<name> battery` | `sensor` | Battery percentage. |
 
-## Using images stored in `config/`
-
-Images referenced by `path:` must live under your Home Assistant **config
-directory** (a `mojipic_images/` subfolder is a good choice). Paths outside it are
-rejected.
+---
 
 ## Performance — please read
 
-A full image push is **192 BLE writes and takes a few seconds.** It is not instant,
-and there is no shortcut:
+A full image push is **192 Bluetooth writes and takes a few seconds.** There is no
+shortcut:
 
-> MojiPic's firmware exposes the "display stored image N" characteristic
-> (`FFFD`) as **read-only**, so there is no way to pre-load images and switch
-> between them quickly. Every image change requires a full re-push.
+> MojiPic's firmware exposes the "display stored image N" characteristic as
+> **read-only**, so images cannot be pre-loaded and switched quickly. **Every image
+> change is a full transfer.**
 
 Practical consequences:
 
-- Don't fire two `display_image` calls within a few seconds of each other — they
-  will collide on the BLE connection. If you need a sequence, add a `delay:`.
-- Because uploads take seconds, **avoid triggering on noisy sensors** (motion with
-  a short cooldown, say) or you'll spend more time uploading than the display is
-  useful.
-- A sensible pattern is to debounce your trigger:
+- Don't fire two display calls within a few seconds of each other — the newer one wins
+  and abandons the older, which is intentional but worth knowing.
+- **Debounce noisy triggers.** Motion sensors in particular.
+- A sensible pattern:
 
 ```yaml
 automation:
@@ -166,39 +166,86 @@ automation:
         for:
           seconds: 5
     actions:
-      - action: mojipic.display_image
+      - action: mojipic.display_stored
         data:
-          path: mojipic_images/hello.png
+          image_id: 1
 ```
+
+---
+
+## Honest limitations
+
+**This section is the important one.**
+
+- **On-host verification of in-process Bluetooth writes is pending.** The BLE protocol
+  was reverse-engineered and verified against real hardware, but pushing through Home
+  Assistant's own Bluetooth stack has not yet been confirmed on a live Home Assistant
+  install. Home Assistant's Bluetooth support is primarily built around passive
+  advertisement monitoring; a MojiPic push is 192 *active* writes. If pushes fail on
+  your setup, please open an issue — the transport is a single swappable class, so it is
+  an isolated fix rather than a rewrite.
+
+- **A successful push is reported as "sent, unverified."** This firmware exposes no
+  flash-ready flag and no trustworthy slot state, so the integration cannot confirm from
+  the device that an image arrived. It reports what is actually true rather than
+  claiming a verification the hardware cannot support.
+
+- **Bluetooth range is the main practical limit.** BLE is roughly 10 m and walls matter.
+  If pushes are intermittent, put an ESPHome Bluetooth proxy near the display. The
+  integration logs a warning below **−80 dBm**.
+
+- **Photographs at 32×32 are inherently rough.** Icons, emoji and simple graphics look
+  far better. A detailed photo will always look coarse — that is the hardware, not a bug.
+
+- **Only 5 bits per channel** (32 levels of red, green and blue), so very subtle
+  gradients band a little.
+
+- **Non-square images are centre-cropped**, not letterboxed, because stretching distorts
+  faces.
+
+- **MojiPic does not support Bluetooth pairing or bonding.** The integration remembers
+  the device address and reconnects on that basis. If a firmware update or a battery
+  event changes the address, use `mojipic.rescan` or the repair flow — it finds the
+  display again and re-persists the address.
+
+---
 
 ## Troubleshooting
 
-**"not reachable" / nothing happens**
-- Is it powered on and in range? BLE is short-range; walls matter.
-- Is the vendor app open and holding a connection? Close it — Android/iOS apps
-  often keep BLE connections open and MojiPic allows only one.
-- Does Home Assistant see the device? Check the **Bluetooth** integration.
-- If you're using an ESPHome proxy, confirm it's powered and advertising.
+**"Not found" during setup**
+Make sure the display is powered on, in range, and **not connected to the vendor app** —
+Android and iOS apps often hold a BLE connection open, and this display allows only one
+at a time. Moving the display usually fixes a failed scan.
 
-**Image looks wrong**
-- Anything not square will be letterboxed with black bars. That's intentional.
-- Only 5 bits per channel (32 levels of red/green/blue) are available, so very
-  subtle gradients band a little. That's the hardware.
+**Push fails or is intermittent**
+Check the RSSI warning in the log (below −80 dBm means trouble). Move the adapter or add
+a Bluetooth proxy closer to the display.
 
-**Upload fails partway**
-- Move the ESPHome proxy closer, or reduce interference.
-- Very large source images take longer to encode — resize before sending.
+**An image looks wrong**
+Non-square images are cropped centrally by design. Only 5 bits per channel are available,
+so fine gradients band. Very dark photos are brightened automatically, but very dark
+artwork may still need lightening beforehand.
+
+**Battery reads oddly**
+MojiPic is a 12V automotive accessory. A reading usually means it is charging, or running
+on its internal pack.
+
+---
 
 ## How this was built
 
-This is an unofficial integration. The BLE protocol was reverse-engineered from
-the vendor's Android app (Mojipic v4.2.0-R) and then **verified against real
-hardware** — a solid-colour test image and a diagonal-stripe pattern were pushed
-to a physical MojiPic and confirmed visually, which validates channel order, bit
-depth, row ordering and chunk framing.
+Unofficial integration. The BLE protocol was reverse-engineered from the vendor's Android
+app and then **verified against real hardware**: a solid-colour image and a
+diagonal-stripe pattern were pushed to a physical MojiPic and confirmed visually, which
+validates channel order, bit depth, row ordering and chunk framing.
 
-No affiliation with or endorsement from Infinitum Trading / IIP Brothers.
+Those tests also corrected several assumptions the vendor's app makes about its own
+firmware, which this integration follows instead:
 
-## Credits
+- the pixel characteristic needs **write-with-response**, not write-without-response
+- the "show stored image" characteristic is **read-only** — no fast slot-switch exists
+- the status characteristic **never** reports a flash-ready flag
 
-Protocol research and implementation by the owner of this repository.
+No affiliation with or endorsement from the device manufacturer.
+
+MIT licensed.

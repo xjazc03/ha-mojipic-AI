@@ -1,0 +1,179 @@
+upload_image:
+  name: Upload image
+  description: >-
+    Store an image for display on the MojiPic. PNG and JPEG are supported.
+    Note that photographs at 32x32 are inherently rough; icons and emoji-style
+    graphics look much better.
+  fields:
+    image_data:
+      name: Image data
+      description: The image, base64 encoded.
+      required: false
+      selector:
+        text:
+    image_path:
+      name: Image path
+      description: >-
+        Path to an image inside the Home Assistant config directory,
+        for example mojipic_images/doorbell.png
+      required: false
+      selector:
+        text:
+    filename:
+      name: Filename
+      description: Original filename, used for display, for example doorbell.png
+      required: true
+      example: doorbell.png
+      selector:
+        text:
+    image_id:
+      name: Image id
+      description: Optional id to store at. Defaults to the next free slot.
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 4095
+          mode: box
+
+delete_image:
+  name: Delete image
+  description: Remove a stored image.
+  fields:
+    image_id:
+      name: Image id
+      description: The id of the image to delete.
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 4095
+          mode: box
+    address:
+      name: Device
+      description: Only needed if you have more than one MojiPic.
+      required: false
+      selector:
+        text:
+
+display_stored:
+  name: Display stored image
+  description: Display an image previously uploaded with "Upload image".
+  fields:
+    image_id:
+      name: Image id
+      description: The id of the image to display.
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 4095
+          mode: box
+    address:
+      name: Device
+      required: false
+      selector:
+        text:
+
+display_image:
+  name: Display image file
+  description: >-
+    Display an image directly from a file without storing it first. Takes a few
+    seconds, because the whole image is transferred over Bluetooth.
+  fields:
+    image_path:
+      name: Image path
+      description: >-
+        Path to an image inside the Home Assistant config directory.
+      required: true
+      example: mojipic_images/doorbell.png
+      selector:
+        text:
+    address:
+      name: Device
+      required: false
+      selector:
+        text:
+
+set_brightness:
+  name: Set brightness
+  description: Set the display brightness.
+  fields:
+    brightness:
+      name: Brightness
+      description: Brightness percentage.
+      required: true
+      default: 50
+      selector:
+        number:
+          min: 0
+          max: 100
+          mode: slider
+    address:
+      name: Device
+      required: false
+      selector:
+        text:
+
+clear_screen:
+  name: Clear screen
+  description: Clear the display to black.
+  fields:
+    address:
+      name: Device
+      required: false
+      selector:
+        text:
+
+device_on:
+  name: Power on
+  description: Turn the display on.
+  fields:
+    address:
+      name: Device
+      required: false
+      selector:
+        text:
+
+device_off:
+  name: Power off
+  description: Turn the display off.
+  fields:
+    address:
+      name: Device
+      required: false
+      selector:
+        text:
+
+screen_on:
+  name: Screen on
+  description: Wake the panel.
+  fields:
+    address:
+      name: Device
+      required: false
+      selector:
+        text:
+
+screen_off:
+  name: Screen off
+  description: Blank the panel.
+  fields:
+    address:
+      name: Device
+      required: false
+      selector:
+        text:
+
+rescan:
+  name: Rescan for display
+  description: >-
+    Look for the display again and update the remembered address. MojiPic does
+    not support Bluetooth pairing, so a firmware update or battery event can
+    change its address.
+  fields:
+    address:
+      name: Device
+      required: false
+      selector:
+        text:

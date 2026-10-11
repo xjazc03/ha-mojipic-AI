@@ -1,0 +1,142 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Add a MojiPic display",
+        "description": "Leave 'Scan for a MojiPic' on and Home Assistant will look for one, or type the address yourself (format AA:BB:CC:DD:EE:FF).\n\nIf nothing is found: {help_not_found}",
+        "data": {
+          "scan": "Scan for a MojiPic",
+          "address": "BLE address",
+          "name": "Name",
+          "name_prefix": "Advertised name prefix"
+        }
+      }
+    },
+    "error": {
+      "not_found": "No MojiPic found. {help_not_found}",
+      "no_bluetooth": "Home Assistant cannot see a Bluetooth adapter. {no_bluetooth_help}",
+      "invalid_address": "That does not look like a Bluetooth address. Use the format AA:BB:CC:DD:EE:FF."
+    },
+    "abort": {
+      "already_configured": "This MojiPic is already configured.",
+      "no_devices_found": "No MojiPic was discovered automatically."
+    }
+  },
+  "repair": {
+    "init": {
+      "title": "Reconnect this MojiPic",
+      "description": "This will try to find the display again and update the remembered address.\n\nIf it still fails: {help}"
+    },
+    "abort": {
+      "still_unreachable": "The display could not be found. Check it is powered on, in range, and not connected to the vendor app."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "MojiPic options",
+        "data": {
+          "address": "BLE address",
+          "name": "Name",
+          "name_prefix": "Advertised name prefix"
+        }
+      }
+    }
+  },
+  "entity": {
+    "image": {
+      "name": "Image"
+    },
+    "image_select": {
+      "name": "Displayed image"
+    }
+  },
+  "services": {
+    "upload_image": {
+      "name": "Upload image",
+      "description": "Store an image for display on the MojiPic. PNG and JPEG are supported. Note that photographs at 32x32 are inherently rough; icons and emoji look much better.",
+      "fields": {
+        "image_data": {
+          "name": "Image data",
+          "description": "The image as base64."
+        },
+        "image_path": {
+          "name": "Image path",
+          "description": "Path to an image inside the Home Assistant config directory."
+        },
+        "filename": {
+          "name": "Filename",
+          "description": "Original filename, e.g. doorbell.png."
+        },
+        "image_id": {
+          "name": "Image id",
+          "description": "Optional id to store at. Defaults to the next free slot."
+        }
+      }
+    },
+    "delete_image": {
+      "name": "Delete image",
+      "description": "Remove a stored image.",
+      "fields": {
+        "image_id": {
+          "name": "Image id",
+          "description": "The id of the image to delete."
+        }
+      }
+    },
+    "display_stored": {
+      "name": "Display stored image",
+      "description": "Display an image previously uploaded with 'Upload image'.",
+      "fields": {
+        "image_id": {
+          "name": "Image id",
+          "description": "The id of the image to display."
+        }
+      }
+    },
+    "display_image": {
+      "name": "Display image file",
+      "description": "Display an image directly from a file, without storing it first.",
+      "fields": {
+        "image_path": {
+          "name": "Image path",
+          "description": "Path to an image inside the Home Assistant config directory."
+        }
+      }
+    },
+    "set_brightness": {
+      "name": "Set brightness",
+      "description": "Set the display brightness.",
+      "fields": {
+        "brightness": {
+          "name": "Brightness",
+          "description": "Brightness percentage."
+        }
+      }
+    },
+    "clear_screen": {
+      "name": "Clear screen",
+      "description": "Clear the display to black."
+    },
+    "device_on": {
+      "name": "Power on",
+      "description": "Turn the display on."
+    },
+    "device_off": {
+      "name": "Power off",
+      "description": "Turn the display off."
+    },
+    "screen_on": {
+      "name": "Screen on",
+      "description": "Wake the panel."
+    },
+    "screen_off": {
+      "name": "Screen off",
+      "description": "Blank the panel."
+    },
+    "rescan": {
+      "name": "Rescan for display",
+      "description": "Look for the display again and update the remembered address."
+    }
+  }
+}
