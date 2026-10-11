@@ -1,5 +1,11 @@
 # MojiPic for Home Assistant
 
+> **This integration was written by an AI coding agent.** The BLE protocol was
+> reverse-engineered from the vendor's Android app by an AI agent, then verified
+> against physical hardware. The `-AI` suffix in the repository name is deliberate,
+> so that anyone considering installing this knows what they are getting. Please
+> read the [Limitations](#honest-limitations) section before relying on it.
+
 Push images to a **MojiPic** 32×32 RGB LED matrix display from Home Assistant, so the
 display reacts to things happening in your house — doorbell, motion at night, a package
 at the door, anything you automate.
@@ -234,18 +240,27 @@ on its internal pack.
 
 ## How this was built
 
-Unofficial integration. The BLE protocol was reverse-engineered from the vendor's Android
-app and then **verified against real hardware**: a solid-colour image and a
-diagonal-stripe pattern were pushed to a physical MojiPic and confirmed visually, which
-validates channel order, bit depth, row ordering and chunk framing.
+**Written by an AI coding agent.** Specifically:
 
-Those tests also corrected several assumptions the vendor's app makes about its own
-firmware, which this integration follows instead:
+- The BLE protocol was reverse-engineered by an AI agent from the vendor's Android
+  app (Mojipic v4.2.0-R), decompiled and read in full.
+- The findings were then **verified against real hardware**: a solid-colour image and a
+  diagonal-stripe pattern were pushed to a physical MojiPic and confirmed visually,
+  which validates channel order, bit depth, row ordering and chunk framing.
+- Hardware testing corrected several assumptions the vendor's app makes about its own
+  firmware. This integration follows the measured behaviour instead:
+  - the pixel characteristic needs **write-with-response**, not write-without-response
+  - the "show stored image" characteristic is **read-only** — no fast slot-switch exists
+  - the status characteristic **never** reports a flash-ready flag
 
-- the pixel characteristic needs **write-with-response**, not write-without-response
-- the "show stored image" characteristic is **read-only** — no fast slot-switch exists
-- the status characteristic **never** reports a flash-ready flag
+**What this means for you.** The protocol layer is verified against real hardware and
+covered by 63 automated tests. The **Home Assistant-specific parts — config flow,
+service registration, entity setup — have never been loaded in a real Home Assistant
+instance**, and whether Home Assistant Core's Bluetooth stack can sustain the required
+active GATT writes is still unverified. See [Limitations](#honest-limitations).
 
-No affiliation with or endorsement from the device manufacturer.
+You are welcome to try it, report what breaks, and contribute fixes.
+
+Unofficial integration. No affiliation with or endorsement from the device manufacturer.
 
 MIT licensed.
