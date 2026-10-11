@@ -98,10 +98,21 @@ ATTR_PACKETS_SENT = "packets_sent"
 # flow with a file picker, so images can be added without writing YAML.
 UPLOAD_OPTION = "\u2b06 Upload image\u2026"
 
-# Where Home Assistant may have put an uploaded file, relative to config_dir.
-# A file *picked* from the config directory comes back as a relative path; a
-# file *uploaded* through the picker comes back as a UUID.
-UPLOAD_CANDIDATE_DIRS = (".storage/uploads", "media", "")
+# Where Home Assistant's file selector actually puts what the user picks.
+#
+# Verified against Home Assistant 2026.10.0, not inferred. The `file` selector
+# returns a UUID, and `homeassistant/components/image_upload/` writes the
+# upload to:
+#
+#     FOLDER_IMAGE = "image"
+#     <config>/image/<token_hex(16)>/original
+#
+# An earlier version of this file listed `.storage/uploads` and `media`. Neither
+# is used by Home Assistant, and the relative-path case could never reach this
+# code at all: FileSelector's validator calls UUID(data) and rejects anything
+# else during schema validation.
+UPLOAD_ROOT_DIR = "image"
+UPLOAD_ORIGINAL_NAME = "original"
 
 # --- States ----------------------------------------------------------------
 STATE_CONFIGURED = "configured"   # address remembered (NOT "paired": MojiPic

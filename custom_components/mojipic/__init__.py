@@ -12,7 +12,6 @@ in the config entry and reused, which is reported as "configured" rather than
 from __future__ import annotations
 
 import contextlib
-import json
 import logging
 from pathlib import Path
 
@@ -55,17 +54,28 @@ _LOGGER = logging.getLogger(__name__)
 PLATFORMS = ["image", "select", "sensor"]
 
 
-def _loaded_version() -> str:
-    """Read the version from the manifest next to this file.
+def _loaded_version(hass: HomeAssistant) -> str:
+    """Report the version Home Assistant actually loaded.
 
-    Deliberately read at runtime rather than imported, so the log reflects what
-    is on disk in the running installation.
+    Uses the loader's own record rather than re-reading manifest.json. An
+    earlier version did read the file, which Home Assistant correctly
+    rejected:
+
+        WARNING (MainThread) [homeassistant.util.loop] Detected blocking call
+        to open with args (PosixPath('.../manifest.json'),) inside the event
+        loop by custom integration 'mojipic' at __init__.py, line 66
+
+    A version banner is not worth a blocking file read on the event loop.
+    `loader.Integration.version` is populated from the manifest when the
+    integration is loaded, so this is both correct and free.
     """
     try:
-        manifest = Path(__file__).parent / "manifest.json"
-        return json.loads(manifest.read_text()).get("version", "?")
+        from homeassistant.loader import async_get_loaded_integration
+
+        return async_get_loaded_integration(hass, DOMAIN).version
     except Exception:  # noqa: BLE001 - diagnostics must never break setup
-        return "?"
+        _LOGGER.debug("Could not determine the loaded MojiPic version", exc_info=True)
+        return "unknown"
 
 
 
@@ -90,7 +100,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # already present and correct.
     _LOGGER.info(
         "MojiPic %s loading (entry %s, address %s)",
-        _loaded_version(), entry.entry_id,
+        _loaded_version(hass), entry.entry_id,
         entry.data.get("address", "?"),
     )
 

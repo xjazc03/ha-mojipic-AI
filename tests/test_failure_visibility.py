@@ -21,6 +21,7 @@ The thread-safety fix came out of the same log:
                 at custom_components/mojipic/sensor.py:59
 """
 
+import ast
 import sys
 import unittest
 from pathlib import Path
@@ -33,6 +34,22 @@ import _mjloader  # noqa: E402
 
 def _source(name: str) -> str:
     return (Path(_mjloader.PKG_PATH) / f"{name}.py").read_text()
+
+
+def _function_body(src: str, header: str) -> str:
+    """Return a function's own lines, without the next top-level definition.
+
+    Splitting on "\ndef " is unreliable here because the file uses two blank
+    lines between functions, and because the docstrings themselves mention
+    `def` in prose. Walk to the next line that starts at column zero instead.
+    """
+    start = src.index(header)
+    out = []
+    for line in src[start:].split("\n")[1:]:
+        if line and not line[0].isspace():
+            break
+        out.append(line)
+    return "\n".join(out)
 
 
 class TestNoSilentAbort(unittest.TestCase):
@@ -107,45 +124,75 @@ class TestVersionIsLogged(unittest.TestCase):
         src = _source("__init__")
         setup = src.split("async def async_setup_entry")[1]
         self.assertIn("_LOGGER.info(", setup.split("transport =")[0])
-        self.assertIn("_loaded_version()", setup)
+        self.assertIn("_loaded_version(hass)", setup)
 
-    def test_version_helper_reads_the_manifest(self):
+    def test_version_helper_does_no_blocking_io(self):
+        """Home Assistant rejected the file read, correctly.
+
+        Observed on the live install:
+
+            WARNING (MainThread) [homeassistant.util.loop] Detected blocking
+            call to open with args (PosixPath('.../manifest.json'),) inside
+            the event loop by custom integration 'mojipic' at
+            __init__.py, line 66
+
+        The version must come from the loader's own record instead.
+        """
         src = _source("__init__")
-        self.assertIn("manifest.json", src.split("def _loaded_version")[1])
+        tree = ast.parse(src)
+        fn = next(
+            n for n in ast.walk(tree)
+            if isinstance(n, ast.FunctionDef) and n.name == "_loaded_version"
+        )
 
-    def test_version_helper_cannot_break_setup(self):
+        # Inspect executable code only. A textual scan would trip over the
+        # docstring, which deliberately quotes the file path and the warning
+        # it replaced -- and a test that fails because of its own
+        # documentation trains people to ignore red.
+        used = {
+            node.attr for node in ast.walk(fn)
+            if isinstance(node, ast.Attribute)
+        } | {
+            node.id for node in ast.walk(fn)
+            if isinstance(node, ast.Name)
+        } | {
+            node.func.id for node in ast.walk(fn)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+
+        for forbidden in ("read_text", "open", "load", "loads"):
+            self.assertNotIn(
+                forbidden,
+                used,
+                f"_loaded_version calls {forbidden}(); file I/O here blocks "
+                "the event loop. loader.Integration.version already holds it.",
+            )
+
+        self.assertIn(
+            "async_get_loaded_integration",
+            used,
+            "the version should come from the loader",
+        )
+
+    def test_helper_receives_hass(self):
+        """The loader needs hass, so the signature must take it."""
+        self.assertIn(
+            "def _loaded_version(hass: HomeAssistant)",
+            _source("__init__"),
+        )
+
+    def test_helper_cannot_break_setup(self):
         """A diagnostics helper must never be the thing that fails."""
-        src = _source("__init__")
-        body = src.split("def _loaded_version")[1]
+        body = _source("__init__").split("def _loaded_version")[1]
         self.assertIn(
             "except Exception",
             body,
             "_loaded_version must swallow its own errors",
         )
 
-    def test_helper_returns_the_manifest_version(self):
-        """Read the manifest rather than a hardcoded string.
-
-        A previous version of this test asserted the literal "1.1.4" and failed
-        on the next version bump -- which is exactly the kind of test that
-        trains people to ignore red.
-        """
-        import json
-
-        module = _mjloader.load_module("__init__")
-        expected = json.loads(
-            (Path(_mjloader.PKG_PATH) / "manifest.json").read_text()
-        )["version"]
-        self.assertEqual(module._loaded_version(), expected)
-
-    def test_helper_falls_back_when_the_manifest_is_unreadable(self):
-        """Diagnostics must never be the thing that breaks setup."""
-        module = _mjloader.load_module("__init__")
-        self.assertTrue(callable(module._loaded_version))
-        # The function is wrapped so an unreadable manifest cannot raise; the
-        # try/except is asserted structurally above.
-        self.assertEqual(module._loaded_version()[:1].isdigit(), True)
-
+    def test_setup_passes_hass_to_the_helper(self):
+        setup = _source("__init__").split("async def async_setup_entry")[1]
+        self.assertIn("_loaded_version(hass)", setup)
 
 class TestNoStaleTimedelta(unittest.TestCase):
     """The bug that started all of this, asserted once more at the top."""

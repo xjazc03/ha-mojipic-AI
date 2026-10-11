@@ -6,10 +6,11 @@
   ],
   "config_flow": true,
   "dependencies": [
-    "bluetooth_adapters",
     "bluetooth",
+    "bluetooth_adapters",
     "http",
-    "image"
+    "image",
+    "image_upload"
   ],
   "documentation": "https://github.com/xjazc03/ha-mojipic-AI",
   "integration_type": "hub",
@@ -19,5 +20,5 @@
     "Pillow>=11",
     "bleak-retry-connector>=3.7"
   ],
-  "version": "1.1.5"
+  "version": "1.1.6"
 }

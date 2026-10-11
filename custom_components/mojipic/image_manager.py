@@ -20,13 +20,15 @@ import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
+from uuid import UUID
 from typing import Any, Optional
 
 from homeassistant.core import HomeAssistant
 
 from .const import (
     BYTES_PER_FRAME,
-    UPLOAD_CANDIDATE_DIRS,
+    UPLOAD_ORIGINAL_NAME,
+    UPLOAD_ROOT_DIR,
     FRAMEBUFFER_SUFFIX,
     IMAGE_STORAGE_BIN_DIR,
     IMAGE_STORAGE_DIR,
@@ -292,19 +294,49 @@ class UploadResolutionError(ImageConversionError):
     """A file chosen in the upload flow could not be found on disk."""
 
 
-def resolve_upload_path(hass: HomeAssistant, value: str) -> tuple[bytes, str]:
-    """Resolve a file chosen in the upload UI to (raw bytes, filename).
+async def async_resolve_upload_path(
+    hass: HomeAssistant, value: str
+) -> tuple[bytes, str]:
+    """Resolve the value from Home Assistant's `file` selector to image bytes.
 
-    Home Assistant's `file` selector is not consistent about what it returns:
+    The selector does not return a path. Its validator is, verbatim from
+    Home Assistant 2026.10:
 
-      * picking an existing file under the config directory yields a *relative
-        path* such as ``mojipic_images/doorbell.png``
-      * uploading a new file through the picker yields a *UUID* with no
-        separators
+        class FileSelector(Selector[FileSelectorConfig]):
+            def __call__(self, data):
+                if not isinstance(data, str):
+                    raise probatio.Invalid("Value should be a string")
+                UUID(data)
+                return data
 
-    Both are supported. UUIDs are looked for in the locations Home Assistant
-    uses for uploads, in order, and the search never escapes the config
-    directory.
+    so anything that is not a UUID is rejected by schema validation before
+    this function runs. An earlier version of this code also accepted a
+    relative path and searched `.storage/uploads` and `media`; that branch
+    was unreachable and those locations are not where Home Assistant puts
+    uploads. Confirmed by running the real integration against real Home
+    Assistant:
+
+        probatio.error.MultipleInvalid: not a valid value: badly formed
+        hexadecimal UUID string at 'file'
+
+    Where the bytes actually are, from
+    `homeassistant/components/image_upload/`:
+
+      * `FOLDER_IMAGE = "image"`
+      * the id is `secrets.token_hex(16)` -- 32 hex characters
+      * the file is written to `<config>/image/<id>/original`
+
+    So a selection of `3f2a...` resolves to `<config>/image/3f2a.../original`.
+
+    Only jpeg, png and gif are accepted by that component, so no other format
+    can arrive here in practice.
+
+    The disk access runs in the executor. Doing it inline was flagged by Home
+    Assistant on a real install:
+
+        Detected blocking call to read_bytes with args
+        (PosixPath('.../image/<id>/original'),) inside the event loop by
+        custom integration 'mojipic' at image_manager.py
     """
     from pathlib import Path
 
@@ -312,44 +344,50 @@ def resolve_upload_path(hass: HomeAssistant, value: str) -> tuple[bytes, str]:
     if not value:
         raise UploadResolutionError("no file was selected")
 
+    # Match FileSelector's own validator. Accepting anything else here would
+    # mean accepting something the schema already rejected.
+    try:
+        uuid_value = str(UUID(value))
+    except (ValueError, AttributeError, TypeError) as err:
+        raise UploadResolutionError(
+            "That is not a valid file selection."
+        ) from err
+
     config_dir = Path(hass.config.config_dir).resolve()
-    candidates = []
 
-    looks_like_uuid = (
-        "/" not in value
-        and "\\" not in value
-        and len(value) == 32
-        and all(c in "0123456789abcdefABCDEF" for c in value)
-    )
+    # The id Home Assistant generates is lowercase hex with no separators.
+    # Accept the dashed form too, since UUID() normalises either.
+    raw_id = uuid_value.replace("-", "")
 
-    if looks_like_uuid:
-        for folder in UPLOAD_CANDIDATE_DIRS:
-            candidates.append(config_dir / folder / value if folder
-                              else config_dir / value)
-    else:
-        # Relative path chosen from the config directory.
-        candidates.append(config_dir / value.lstrip("/"))
+    candidates = [
+        config_dir / UPLOAD_ROOT_DIR / raw_id / UPLOAD_ORIGINAL_NAME,
+        config_dir / UPLOAD_ROOT_DIR / uuid_value / UPLOAD_ORIGINAL_NAME,
+    ]
 
-    for path in candidates:
+    def _read(path: Path) -> Optional[bytes]:
+        """Executor body: resolve, confine to config_dir, read."""
         try:
             resolved = path.resolve()
         except OSError:
-            continue
+            return None
         # Never read outside the config directory.
-        if config_dir not in resolved.parents and resolved != config_dir:
+        if config_dir not in resolved.parents:
             _LOGGER.warning("Refusing to read %s: outside config", resolved)
-            continue
-        if resolved.is_file():
-            try:
-                return resolved.read_bytes(), resolved.name
-            except OSError as err:
-                raise UploadResolutionError(
-                    f"Could not read {resolved.name}: {err}"
-                ) from err
+            return None
+        if not resolved.is_file():
+            return None
+        try:
+            return resolved.read_bytes()
+        except OSError:
+            return None
+
+    for path in candidates:
+        data = await hass.async_add_executor_job(_read, path)
+        if data is not None:
+            return data, path.name
 
     tried = ", ".join(str(c) for c in candidates)
     raise UploadResolutionError(
         f"Could not find that file. Looked in: {tried}. "
-        "If you uploaded it, it may still be copying; otherwise put the image "
-        "in your Home Assistant config directory and pick it again."
+        "Re-open the picker and choose the file again."
     )

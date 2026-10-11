@@ -52,7 +52,7 @@ from .const import (
     DOMAIN,
 )
 from .image_encode import ImageConversionError
-from .image_manager import UploadResolutionError, resolve_upload_path
+from .image_manager import UploadResolutionError, async_resolve_upload_path
 from .transport import TransportError, default_transport
 
 
@@ -252,7 +252,7 @@ class MojipicConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             manager = bundle["manager"]
             coordinator = bundle["coordinator"]
             try:
-                raw, filename = resolve_upload_path(
+                raw, filename = await async_resolve_upload_path(
                     self.hass, user_input.get("file")
                 )
                 stored = await manager.async_upload(raw, filename)

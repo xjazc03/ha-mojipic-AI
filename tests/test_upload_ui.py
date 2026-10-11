@@ -90,16 +90,43 @@ class _FakeHass:
     def __init__(self, root):
         self.config = _FakeConfig(root)
 
+    async def async_add_executor_job(self, func, *args):
+        """Run on a real thread, as Home Assistant does."""
+        import asyncio
+        import functools
+
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None, functools.partial(func, *args)
+        )
+
 
 class TestResolveUploadPath(unittest.TestCase):
+    """Resolve what Home Assistant's `file` selector hands back.
+
+    Everything here was wrong until the integration was run against a real
+    Home Assistant 2026.10.0. The previous version of this test asserted
+    behaviour that does not exist:
+
+      * that a *relative path* could arrive. It cannot. `FileSelector.__call__`
+        runs `UUID(data)` and rejects anything else during schema validation:
+
+            probatio.error.MultipleInvalid: not a valid value: badly formed
+            hexadecimal UUID string at 'file'
+
+      * that uploads live in `.storage/uploads` or `media`. They do not.
+        `homeassistant/components/image_upload/` writes to
+        `<config>/image/<token_hex(16)>/original`.
+
+    The tests below encode the verified layout instead.
+    """
+
     def setUp(self):
         import tempfile
 
         self._tmp = tempfile.TemporaryDirectory()
         self.root = Path(self._tmp.name)
         self.hass = _FakeHass(self.root)
-        (self.root / "mojipic_images").mkdir()
-        (self.root / ".storage" / "uploads").mkdir(parents=True)
         self.addCleanup(self._tmp.cleanup)
 
     def _png(self):
@@ -110,45 +137,78 @@ class TestResolveUploadPath(unittest.TestCase):
         Image.new("RGB", (32, 32), (128, 0, 128)).save(buf, format="PNG")
         return buf.getvalue()
 
-    def test_resolves_relative_path(self):
-        target = self.root / "mojipic_images" / "doorbell.png"
-        target.write_bytes(self._png())
-        raw, name = image_manager.resolve_upload_path(
-            self.hass, "mojipic_images/doorbell.png"
-        )
-        self.assertEqual(name, "doorbell.png")
+    def _stage(self, upload_id: str) -> None:
+        """Reproduce exactly what image_upload writes."""
+        d = self.root / "image" / upload_id
+        d.mkdir(parents=True)
+        (d / "original").write_bytes(self._png())
+
+    def _resolve(self, value):
+        import asyncio
+
+        return asyncio.run(image_manager.async_resolve_upload_path(self.hass, value))
+
+    def test_resolves_the_real_upload_layout(self):
+        """image_upload writes <config>/image/<id>/original."""
+        upload_id = "a" * 32
+        self._stage(upload_id)
+        raw, name = self._resolve(upload_id)
+        self.assertEqual(raw, self._png())
+        self.assertEqual(name, "original")
+
+    def test_accepts_the_dashed_uuid_form(self):
+        """UUID() normalises either shape."""
+        upload_id = "b" * 32
+        self._stage(upload_id)
+        dashed = (f"{upload_id[:8]}-{upload_id[8:12]}-{upload_id[12:16]}-"
+                  f"{upload_id[16:20]}-{upload_id[20:]}")
+        raw, _ = self._resolve(dashed)
         self.assertEqual(raw, self._png())
 
-    def test_resolves_uploaded_uuid(self):
-        uuid = "a" * 32
-        (self.root / ".storage" / "uploads" / uuid).write_bytes(self._png())
-        raw, name = image_manager.resolve_upload_path(self.hass, uuid)
-        self.assertEqual(len(raw), len(self._png()))
-        self.assertEqual(len(name), 32)
+    def test_rejects_a_relative_path(self):
+        """It never reaches here in practice, and must not be hunted for.
 
-    def test_resolves_uuid_from_media_dir(self):
-        uuid = "b" * 32
-        (self.root / "media").mkdir()
-        (self.root / "media" / uuid).write_bytes(self._png())
-        raw, _ = image_manager.resolve_upload_path(self.hass, uuid)
-        self.assertEqual(len(raw), len(self._png()))
+        Schema validation rejects it first. Accepting it anyway would imply a
+        code path Home Assistant can never produce.
+        """
+        d = self.root / "mojipic_images"
+        d.mkdir()
+        (d / "doorbell.png").write_bytes(self._png())
+        with self.assertRaises(image_manager.UploadResolutionError):
+            self._resolve("mojipic_images/doorbell.png")
 
     def test_rejects_empty(self):
         with self.assertRaises(image_manager.UploadResolutionError):
-            image_manager.resolve_upload_path(self.hass, "")
+            self._resolve("")
 
-    def test_reports_missing_file_helpfully(self):
-        with self.assertRaises(image_manager.UploadResolutionError) as ctx:
-            image_manager.resolve_upload_path(self.hass, "mojipic_images/nope.png")
-        self.assertIn("config directory", str(ctx.exception))
-
-    def test_refuses_to_escape_config_dir(self):
-        """A traversal path must not be read, even if the file exists."""
+    def test_rejects_a_traversal_attempt(self):
+        """A UUID cannot contain a path separator, and this must not escape."""
         outside = self.root.parent / "outside_secret.png"
         outside.write_bytes(self._png())
         self.addCleanup(lambda: outside.unlink(missing_ok=True))
         with self.assertRaises(image_manager.UploadResolutionError):
-            image_manager.resolve_upload_path(self.hass, "../outside_secret.png")
+            self._resolve("../../outside_secret")
+
+    def test_missing_upload_reports_where_it_looked(self):
+        with self.assertRaises(image_manager.UploadResolutionError) as ctx:
+            self._resolve("c" * 32)
+        message = str(ctx.exception)
+        self.assertIn("image", message)
+        self.assertIn("original", message)
+
+    def test_resolver_is_a_coroutine(self):
+        """It touches the filesystem, so it must run in the executor.
+
+        Home Assistant flagged the inline version on a real install:
+        `Detected blocking call to read_bytes ... inside the event loop`.
+        """
+        import inspect
+
+        self.assertTrue(
+            inspect.iscoroutinefunction(image_manager.async_resolve_upload_path),
+            "resolve_upload_path must be async so file I/O goes to the executor",
+        )
+
 
 
 class TestUploadFlowReachable(unittest.TestCase):

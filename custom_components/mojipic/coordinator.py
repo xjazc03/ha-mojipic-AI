@@ -209,8 +209,39 @@ class MojipicCoordinator:
         self.link_state = STATE_UNREACHABLE
 
     def _ensure_worker(self) -> None:
+        """Start the push worker as a *background* task.
+
+        `hass.async_create_task` was wrong here, and Home Assistant said so on a
+        real install:
+
+            Setup timed out for bootstrap waiting on
+            Task<MojipicCoordinator._async_worker()>
+
+        A normal task is awaited by `async_block_till_done`, so a worker that
+        parks indefinitely holds up startup for the full bootstrap timeout --
+        five minutes. It then survives to shutdown and logs
+
+            Task<..._async_worker()> was still running after final writes
+            shutdown stage
+
+        `ConfigEntry.async_create_background_task` is the API for a task that
+        lives as long as the entry: it does not block startup, is cancelled
+        when the entry unloads, and is not awaited by async_block_till_done.
+
+        Note its signature takes `hass` explicitly:
+
+            def async_create_background_task(self, hass, target, name, ...)
+
+        Omitting it raises
+        "ConfigEntry.async_create_background_task() missing 1 required
+        positional argument: 'hass'" at setup.
+        """
         if self._worker is None or self._worker.done():
-            self._worker = self.hass.async_create_task(self._async_worker())
+            self._worker = self.entry.async_create_background_task(
+                self.hass,
+                self._async_worker(),
+                f"{DOMAIN}_{self.entry.entry_id}_push_worker",
+            )
 
     # -- connection ---------------------------------------------------------
     async def _async_ensure_connected(self) -> bool:
@@ -261,7 +292,11 @@ class MojipicCoordinator:
             return
         if self._reconnect_task and not self._reconnect_task.done():
             return
-        self._reconnect_task = self.hass.async_create_task(self._async_reconnect_loop())
+        self._reconnect_task = self.entry.async_create_background_task(
+            self.hass,
+            self._async_reconnect_loop(),
+            f"{DOMAIN}_{self.entry.entry_id}_reconnect",
+        )
 
     async def _async_health_tick(self, _now=None) -> None:
         """Slow liveness check plus a rescan if the address has gone stale."""

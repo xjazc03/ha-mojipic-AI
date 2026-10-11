@@ -45,6 +45,22 @@ class _FakeEntry:
     title = "Mojipic"
     data = {"address": "AA:BB:CC:DD:EE:FF", "name": "Mojipic"}
 
+    def async_create_background_task(self, hass, target, name, eager_start=True):
+        """Mirror ConfigEntry.async_create_background_task.
+
+        The real signature takes hass explicitly:
+            ConfigEntry.async_create_background_task(hass, target, name)
+        and creates a real task that is *not* awaited by
+        async_block_till_done. Using hass.async_create_task instead made
+        Home Assistant log
+
+            Setup timed out for bootstrap waiting on
+            Task<MojipicCoordinator._async_worker()>
+
+        and hold startup for the full five-minute timeout.
+        """
+        return asyncio.get_running_loop().create_task(target, name=name)
+
 
 def _load_coordinator():
     """Load coordinator.py with the Home Assistant helpers stubbed out."""
@@ -59,7 +75,12 @@ def _load_coordinator():
     dt = types.ModuleType("homeassistant.util.dt")
     import datetime as _datetime
 
-    dt.timedelta = _datetime.timedelta
+    # NOTE: deliberately no `dt.timedelta`. Real Home Assistant does not
+    # export one -- `homeassistant.util.dt` imports datetime internally as `dt`
+    # and exposes utcnow()/parse_datetime()/etc, nothing else. An earlier
+    # version of this stub set `dt.timedelta = datetime.timedelta`, which is
+    # what allowed v1.0.5 to ship a `dt_util.timedelta(...)` call that failed
+    # on every setup. A fake must never be more generous than the real module.
     dt.utcnow = lambda: _datetime.datetime.now(_datetime.timezone.utc)
     util.dt = dt
 

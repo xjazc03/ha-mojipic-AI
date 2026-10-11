@@ -102,8 +102,16 @@ Open the **Image** dropdown for your MojiPic and choose **⬆ Upload image…** 
 top. Home Assistant opens a file picker; pick a PNG or JPEG and it is cropped to
 32×32, stored, and pushed to the display immediately.
 
-The picker lets you either choose a file already in your Home Assistant config
-directory (for example `mojipic_images/doorbell.png`) or upload a new one.
+The picker is Home Assistant's own file selector. It accepts a file you choose
+through the Home Assistant file dialog; the file is stored by Home Assistant
+under `<config>/image/<id>/original` and MojiPic reads it from there. PNG, JPEG
+and GIF are accepted.
+
+This is not a path field. The selector validates its value as a UUID and rejects
+anything else during schema validation, so a hand-typed path such as
+`mojipic_images/doorbell.png` cannot be entered here. For a path-based workflow
+without the UI, use the `mojipic.display_image` service, which takes
+`image_path` relative to your config directory.
 
 There is a second route to the same dialog: **Settings → Devices & Services →
 MojiPic → ⚙ Configure**, then the **Reconfigure** button.
@@ -114,12 +122,30 @@ different platforms, so they survive — which makes this look like the dropdown
 was deleted rather than broken. Reload the integration (or restart Home
 Assistant) and check the log for `mojipic` around the startup time.
 
-**If the upload option gives you an error and no dialog opens**, read the error
-text. This path has been wrong twice before, and both times the failure was a
-Home Assistant API that does not exist (`homeassistant.util.dt.timedelta`, then
-`issue_registry.async_get_issue`). The flow now uses a reconfigure config flow
-started through `config_entries.flow.async_init` with
-`source=SOURCE_RECONFIGURE`, which is a documented path.
+### How this is tested
+
+`tests/test_real_homeassistant.py` asserts these contracts against a **real**
+Home Assistant installation, skipping cleanly when one is not present. Run them
+with a prepared environment:
+
+```
+python -m unittest tests.test_real_homeassistant -v
+```
+
+The contracts it pins are the ones that have actually broken:
+
+- `ImageEntity.__init__` requires `hass`; `SelectEntity` and `SensorEntity`
+  declare no `__init__` at all, so the correct call differs per platform
+- the `file` selector validates a UUID, not a path
+- uploads live at `<config>/image/<id>/original`
+- `ConfigEntry.async_create_background_task(hass, target, name)` takes `hass`
+  explicitly
+- `SOURCE_RECONFIGURE` and the reconfigure entry id read from context
+
+Earlier versions of this project shipped four separate bugs of exactly this
+shape, each of which the test suite passed because the fakes were more generous
+than Home Assistant itself. `tests/_mjloader.py` and `tests/_fakeha.py` now
+mirror the real modules instead of accommodating them.
 
 ### Showing images
 
