@@ -16,6 +16,8 @@ from typing import Any
 
 import voluptuous as vol
 from homeassistant import config_entries
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.core import callback
 from homeassistant.helpers import selector
 
@@ -50,7 +52,17 @@ from .const import (
     DISCOVERY_TIMEOUT,
     DOMAIN,
 )
+from .const import ISSUE_RECONNECT, ISSUE_UPLOAD_IMAGE
+from .image_encode import ImageConversionError
+from .image_manager import UploadResolutionError, resolve_upload_path
 from .transport import TransportError, default_transport
+
+
+def _async_dispatch_refresh(hass, entry_id) -> None:
+    """Tell the select entity to re-read the stored image list."""
+    from homeassistant.helpers.dispatcher import async_dispatcher_send
+
+    async_dispatcher_send(hass, f"{DOMAIN}_{entry_id}_images_changed")
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -229,22 +241,91 @@ class MojipicOptionsFlow(config_entries.OptionsFlow):
 
 
 class MojipicRepairFlow(_RepairFlowBase):
-    """Recover a display that has stopped responding, without re-adding it."""
+    """Repair flows reached from a repair card or an entity action.
 
-    async def async_step_init(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
+    Home Assistant dispatches to ``async_step_<handler_key>``, where the key is
+    whatever was passed to ``async_create_flow``. An earlier version of this
+    file only defined ``async_step_init``, which no key ever matched -- so the
+    whole class was unreachable and the reconnect path silently did nothing.
+
+    Steps:
+      * ``upload_image`` -- pick a file, store it, display it. This is what
+        makes the "Upload image..." option in the select entity work without
+        any YAML.
+      * ``reconnect`` -- rescan and re-persist the remembered address.
+    """
+
+    def __init__(self, hass, handler: str, context, data) -> None:
+        self._entry_id = (context or {}).get("entry_id")
+
+    def _bundle(self):
+        if not self._entry_id:
+            raise HomeAssistantError("This repair is not linked to a MojiPic.")
+        return self.hass.data[DOMAIN][self._entry_id]
+
+    async def async_step_upload_image(self, user_input=None):
+        """Let the user choose an image file and push it to the display."""
+        errors: dict[str, str] = {}
+
         if user_input is not None:
-            entry = self.hass.config_entries.async_get_entry(
-                self.context["entry_id"]
-            )
-            coordinator = self.hass.data[DOMAIN][entry.entry_id]["coordinator"]
+            manager = self._bundle()["manager"]
+            coordinator = self._bundle()["coordinator"]
+            chosen = user_input.get("file")
+
+            try:
+                raw, filename = resolve_upload_path(self.hass, chosen)
+                entry_meta = await manager.async_upload(raw, filename)
+            except UploadResolutionError as err:
+                errors["base"] = "not_readable"
+                _LOGGER.warning("MojiPic upload failed: %s", err)
+            except ImageConversionError as err:
+                errors["base"] = "bad_image"
+                _LOGGER.warning("MojiPic upload rejected: %s", err)
+            except HomeAssistantError:
+                raise
+            except Exception as err:  # noqa: BLE001
+                errors["base"] = "unknown"
+                _LOGGER.exception("Unexpected error uploading a MojiPic image")
+            else:
+                framebuffer = await manager.async_framebuffer(entry_meta["id"])
+                if framebuffer is not None:
+                    result = await coordinator.async_display(
+                        framebuffer, entry_meta["id"]
+                    )
+                    if not result.outcome.ok:
+                        _LOGGER.warning(
+                            "Image %s was stored but not displayed: %s",
+                            entry_meta["id"], result.error,
+                        )
+                # Stored successfully: dismiss the repair card.
+                ir.async_delete_issue(self.hass, DOMAIN, ISSUE_UPLOAD_IMAGE)
+                _async_dispatch_refresh(self.hass, self._entry_id)
+                return self.async_create_entry(title="", data={})
+
+        return self.async_show_form(
+            step_id="upload_image",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("file"): selector.FileSelector(
+                        {"accept": "image/*"}
+                    )
+                }
+            ),
+            errors=errors,
+        )
+
+    async def async_step_reconnect(self, user_input=None):
+        """Rescan for the display and re-persist its remembered address."""
+        if user_input is not None:
+            coordinator = self._bundle()["coordinator"]
             new_address = await coordinator.async_rebind_if_missing()
             if new_address:
+                ir.async_delete_issue(self.hass, DOMAIN, ISSUE_RECONNECT)
+                _async_dispatch_refresh(self.hass, self._entry_id)
                 return self.async_create_entry(title="", data={})
             return self.async_abort(reason="still_unreachable")
 
         return self.async_show_form(
-            step_id="init",
+            step_id="reconnect",
             description_placeholders={"help": _NOT_FOUND_HELP},
         )

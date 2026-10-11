@@ -96,6 +96,18 @@ data:
   image_path: mojipic_images/doorbell.png
 ```
 
+### Uploading an image (no YAML needed)
+
+Open the **Image** dropdown for your MojiPic and choose **⬆ Upload image…** at the
+top. Home Assistant opens a file picker; pick a PNG or JPEG and it is cropped to
+32×32, stored, and pushed to the display immediately.
+
+The picker lets you either choose a file already in your Home Assistant config
+directory (for example `mojipic_images/doorbell.png`) or upload a new one.
+
+There is a second route to the same dialog: **Settings → Devices & Services →
+MojiPic → ⚙ Configure**.
+
 ### Showing images
 
 From an automation:

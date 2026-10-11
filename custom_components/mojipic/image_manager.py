@@ -26,6 +26,7 @@ from homeassistant.core import HomeAssistant
 
 from .const import (
     BYTES_PER_FRAME,
+    UPLOAD_CANDIDATE_DIRS,
     FRAMEBUFFER_SUFFIX,
     IMAGE_STORAGE_BIN_DIR,
     IMAGE_STORAGE_DIR,
@@ -285,3 +286,70 @@ class ImageManager:
                 handle.write(data)
         except OSError as err:
             _LOGGER.debug("Could not refresh framebuffer cache: %s", err)
+
+
+class UploadResolutionError(ImageConversionError):
+    """A file chosen in the upload flow could not be found on disk."""
+
+
+def resolve_upload_path(hass: HomeAssistant, value: str) -> tuple[bytes, str]:
+    """Resolve a file chosen in the upload UI to (raw bytes, filename).
+
+    Home Assistant's `file` selector is not consistent about what it returns:
+
+      * picking an existing file under the config directory yields a *relative
+        path* such as ``mojipic_images/doorbell.png``
+      * uploading a new file through the picker yields a *UUID* with no
+        separators
+
+    Both are supported. UUIDs are looked for in the locations Home Assistant
+    uses for uploads, in order, and the search never escapes the config
+    directory.
+    """
+    from pathlib import Path
+
+    value = (value or "").strip()
+    if not value:
+        raise UploadResolutionError("no file was selected")
+
+    config_dir = Path(hass.config.config_dir).resolve()
+    candidates = []
+
+    looks_like_uuid = (
+        "/" not in value
+        and "\\" not in value
+        and len(value) == 32
+        and all(c in "0123456789abcdefABCDEF" for c in value)
+    )
+
+    if looks_like_uuid:
+        for folder in UPLOAD_CANDIDATE_DIRS:
+            candidates.append(config_dir / folder / value if folder
+                              else config_dir / value)
+    else:
+        # Relative path chosen from the config directory.
+        candidates.append(config_dir / value.lstrip("/"))
+
+    for path in candidates:
+        try:
+            resolved = path.resolve()
+        except OSError:
+            continue
+        # Never read outside the config directory.
+        if config_dir not in resolved.parents and resolved != config_dir:
+            _LOGGER.warning("Refusing to read %s: outside config", resolved)
+            continue
+        if resolved.is_file():
+            try:
+                return resolved.read_bytes(), resolved.name
+            except OSError as err:
+                raise UploadResolutionError(
+                    f"Could not read {resolved.name}: {err}"
+                ) from err
+
+    tried = ", ".join(str(c) for c in candidates)
+    raise UploadResolutionError(
+        f"Could not find that file. Looked in: {tried}. "
+        "If you uploaded it, it may still be copying; otherwise put the image "
+        "in your Home Assistant config directory and pick it again."
+    )

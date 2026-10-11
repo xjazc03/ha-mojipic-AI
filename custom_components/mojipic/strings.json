@@ -139,5 +139,50 @@
       "name": "Rescan for display",
       "description": "Look for the display again and update the remembered address."
     }
+  },
+  "issues": {
+    "upload_image": {
+      "title": "Upload a MojiPic image",
+      "description": "Pick an image file to send to the display. It is resized to fit 32x32 and shown immediately."
+    },
+    "reconnect": {
+      "title": "MojiPic not responding",
+      "description": "Home Assistant cannot reach the display. Check it is powered on, in range, and not connected to the vendor app."
+    }
+  },
+  "repairs": {
+    "upload_image": {
+      "step": {
+        "upload_image": {
+          "title": "Upload a MojiPic image",
+          "description": "Choose a PNG or JPEG. Images are cropped to fit the 32x32 panel.",
+          "data": {
+            "file": "Image file"
+          },
+          "data_description": {
+            "file": "Pick an existing file from your config directory, or upload a new one."
+          }
+        }
+      },
+      "error": {
+        "not_readable": "That file could not be found. Try again, or copy the image into your Home Assistant config directory first.",
+        "bad_image": "That file could not be read as an image. Please choose a PNG or JPEG.",
+        "unknown": "Something went wrong uploading that image. Check the Home Assistant log for details."
+      },
+      "abort": {
+        "still_unreachable": "The display could not be found."
+      }
+    },
+    "reconnect": {
+      "step": {
+        "reconnect": {
+          "title": "Reconnect this MojiPic",
+          "description": "Home Assistant will look for the display again and update the remembered address."
+        }
+      },
+      "abort": {
+        "still_unreachable": "The display could not be found. Check it is powered on and in range."
+      }
+    }
   }
 }

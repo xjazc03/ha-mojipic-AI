@@ -17,7 +17,13 @@ from homeassistant.helpers.device_registry import CONNECTION_BLUETOOTH, DeviceIn
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_time_interval
 
-from .const import CONF_NAME, DEFAULT_NAME_PREFIX, DOMAIN
+from .const import (
+    CONF_NAME,
+    DEFAULT_NAME_PREFIX,
+    DOMAIN,
+    ISSUE_UPLOAD_IMAGE,
+    UPLOAD_OPTION,
+)
 from .image_encode import ImageConversionError
 
 _LOGGER = logging.getLogger(__name__)
@@ -76,7 +82,8 @@ class MojipicImageSelect(SelectEntity):
     async def async_refresh_options(self) -> None:
         """Pick up newly uploaded images without a restart."""
         entries = await self.manager.async_list()
-        options = [str(item["id"]) for item in entries]
+        # The upload entry always sorts first so it is where the eye lands.
+        options = [UPLOAD_OPTION] + [str(item["id"]) for item in entries]
         if options != self._options:
             self._options = options
             if self._current and self._current not in options:
@@ -100,7 +107,11 @@ class MojipicImageSelect(SelectEntity):
         return {"connection_state": self.coordinator.link_state}
 
     async def async_select_option(self, option: str) -> None:
-        """Push the chosen image to the display."""
+        """Push the chosen image, or open the upload flow."""
+        if option == UPLOAD_OPTION:
+            self._async_open_upload_flow()
+            return
+
         try:
             image_id = int(option)
         except (TypeError, ValueError):
@@ -143,3 +154,35 @@ class MojipicImageSelect(SelectEntity):
             return
         for entity in entities:
             entity.async_set_image(raw, "image/png", image_id)
+
+
+    def _async_open_upload_flow(self) -> None:
+        """Open the upload repair flow.
+
+        Repairs are the documented way for an entity to open a flow that needs
+        input: create a fixable issue, then start its flow. The user gets a
+        file picker, so no YAML is needed.
+        """
+        from homeassistant.helpers import issue_registry as ir
+
+        ir.async_create_issue(
+            self.hass,
+            DOMAIN,
+            ISSUE_UPLOAD_IMAGE,
+            is_fixable=True,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key=ISSUE_UPLOAD_IMAGE,
+            data={"entry_id": self.entry.entry_id},
+        )
+        ir.async_get_issue(
+            self.hass, DOMAIN, ISSUE_UPLOAD_IMAGE
+        ).async_create_flow(
+            ISSUE_UPLOAD_IMAGE,
+            context={
+                "source": config_entries.SOURCE_REPAIR,
+                "entry_id": self.entry.entry_id,
+            },
+        )
+        # Put the dropdown back to whatever it was showing; the upload is a
+        # side action, not a selection.
+        self.async_write_ha_state()
