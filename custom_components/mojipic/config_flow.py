@@ -251,40 +251,78 @@ class MojipicConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             manager = bundle["manager"]
             coordinator = bundle["coordinator"]
-            try:
-                raw, filename = await async_resolve_upload_path(
-                    self.hass, user_input.get("file")
-                )
-                stored = await manager.async_upload(raw, filename)
-            except UploadResolutionError as err:
-                _LOGGER.warning("MojiPic upload failed: %s", err)
-                errors["base"] = "not_readable"
-            except ImageConversionError as err:
-                _LOGGER.warning("MojiPic upload rejected: %s", err)
-                errors["base"] = "bad_image"
-            except Exception:  # noqa: BLE001
-                _LOGGER.exception("Unexpected error uploading a MojiPic image")
-                errors["base"] = "unknown"
-            else:
-                framebuffer = await manager.async_framebuffer(stored["id"])
-                if framebuffer is not None:
-                    result = await coordinator.async_display(
-                        framebuffer, stored["id"]
+            # URL input is keyed by "url" here; file selection uses "file".
+            if self.context.get("url_mode", False):
+                url = user_input.get("url", "").strip()
+                try:
+                    from urllib.request import urlopen
+                    raw = await self.hass.async_add_executor_job(
+                        lambda: urlopen(url, timeout=10).read()
                     )
-                    if not result.outcome.ok:
-                        _LOGGER.warning(
-                            "Image %s stored but not displayed: %s",
-                            stored["id"], result.error,
+                    stored = await manager.async_upload(raw, "url_download.png")
+                except Exception as err:
+                    _LOGGER.error("URL download failed for %s: %s", url, err)
+                    errors["base"] = "url_download_failed"
+                else:
+                    framebuffer = await manager.async_framebuffer(stored["id"])
+                    if framebuffer is not None:
+                        result = await coordinator.async_display(
+                            framebuffer, stored["id"]
                         )
-                _async_dispatch_refresh(self.hass, entry.entry_id)
-                _LOGGER.info("Stored MojiPic image %s (%s)", stored["id"], filename)
-                # Nothing about the entry itself changed, so avoid reloading:
-                # a reload would drop the BLE connection the user just used.
-                return self.async_update_reload_and_abort(
-                    entry,
-                    data_updates={},
-                    reload_even_if_entry_is_unchanged=False,
-                )
+                        if not result.outcome.ok:
+                            _LOGGER.warning(
+                                "Image %s stored but not displayed: %s",
+                                stored["id"], result.error,
+                            )
+                    _async_dispatch_refresh(self.hass, entry.entry_id)
+                    _LOGGER.info("Downloaded MojiPic image from URL (id=%s)", stored["id"])
+                    return self.async_update_reload_and_abort(
+                        entry,
+                        data_updates={},
+                        reload_even_if_entry_is_unchanged=False,
+                    )
+            else:
+                try:
+                    raw, filename = await async_resolve_upload_path(
+                        self.hass, user_input.get("file")
+                    )
+                    stored = await manager.async_upload(raw, filename)
+                except UploadResolutionError as err:
+                    _LOGGER.warning("MojiPic upload failed: %s", err)
+                    errors["base"] = "not_readable"
+                except ImageConversionError as err:
+                    _LOGGER.warning("MojiPic upload rejected: %s", err)
+                    errors["base"] = "bad_image"
+                except Exception:  # noqa: BLE001
+                    _LOGGER.exception("Unexpected error uploading a MojiPic image")
+                    errors["base"] = "unknown"
+                else:
+                    framebuffer = await manager.async_framebuffer(stored["id"])
+                    if framebuffer is not None:
+                        result = await coordinator.async_display(
+                            framebuffer, stored["id"]
+                        )
+                        if not result.outcome.ok:
+                            _LOGGER.warning(
+                                "Image %s stored but not displayed: %s",
+                                stored["id"], result.error,
+                            )
+                    _async_dispatch_refresh(self.hass, entry.entry_id)
+                    _LOGGER.info("Stored MojiPic image %s (%s)", stored["id"], filename)
+                    return self.async_update_reload_and_abort(
+                        entry,
+                        data_updates={},
+                        reload_even_if_entry_is_unchanged=False,
+                    )
+
+        if self.context.get("url_mode", False):
+            return self.async_show_form(
+                step_id="reconfigure",
+                data_schema=vol.Schema(
+                    {vol.Required("url"): selector.TextSelector({"type": selector.TextSelectorType.URL})}
+                ),
+                errors=errors,
+            )
 
         return self.async_show_form(
             step_id="reconfigure",

@@ -270,28 +270,16 @@ class MojipicImageSelect(SelectEntity):
             await self.manager.async_save()
 
     async def _async_open_url_flow(self) -> None:
-        """Download from any user-provided URL via config file."""
-        url_path = Path(self.hass.config.config_dir) / "mojipic" / "url_source.txt"
-        try:
-            url = url_path.read_text(encoding="utf-8").strip()
-        except Exception:
-            url = ""
-        if not url:
-            url_path.parent.mkdir(parents=True, exist_ok=True)
-            url_path.write_text("https://picsum.photos/32/32?random=1\n", encoding="utf-8")
-            url = url_path.read_text(encoding="utf-8").strip()
-            _LOGGER.info("Created %s; edit it with any image URL, then re-select 'Download from URL'", url_path)
-        try:
-            from urllib.request import urlopen
-            data = await self.hass.async_add_executor_job(lambda: urlopen(url, timeout=10).read())
-            raw = bytes(data)
-            stored = await self.manager.async_upload(raw, "url_download.png")
-            framebuffer = await self.manager.async_framebuffer(stored["id"])
-            if framebuffer is not None:
-                result = await self.coordinator.async_display(framebuffer, stored["id"])
-                if result.outcome.ok:
-                    self._current = str(stored["id"])
-                    self.async_write_ha_state()
-                    _LOGGER.info("Downloaded from %s -> id=%s", url, stored["id"])
-        except Exception as err:
-            _LOGGER.error("URL download failed from %s: %s", url, err)
+        """Open URL input dialog via reconfigure flow."""
+        self.hass.async_create_task(
+            self.hass.config_entries.flow.async_init(
+                DOMAIN,
+                context={
+                    "source": config_entries.SOURCE_RECONFIGURE,
+                    "entry_id": self.entry.entry_id,
+                    "url_mode": True,
+                },
+            )
+        )
+        # The dialog opens asynchronously; keep current option.
+        self.async_write_ha_state()
