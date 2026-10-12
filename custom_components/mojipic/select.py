@@ -1,7 +1,8 @@
 """Select entity: pick a stored image without writing YAML.
 
-This is what makes the integration usable from a dashboard. `current_option` is
-the id of the displayed image; selecting one pushes it immediately.
+This is what makes the integration usable from a dashboard. Instead of a
+select dropdown, buttons are used for common commands like screen on/off,
+device on/off, with the option to select from stored images when needed.
 """
 
 from __future__ import annotations
@@ -10,6 +11,7 @@ import logging
 from datetime import timedelta
 
 from homeassistant import config_entries
+from homeassistant.components.button import ButtonEntity
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
@@ -40,28 +42,104 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     bundle = hass.data[DOMAIN][entry.entry_id]
-    entity = MojipicImageSelect(hass, entry, bundle)
+    # Button entities for screen/device commands (from APK dec: ScreenHandler)
+    buttons = [
+        MojipicScreenButton(hass, entry, bundle, "screen_on", "Turn screen on", "mdi:monitor"),
+        MojipicScreenButton(hass, entry, bundle, "screen_off", "Turn screen off", "mdi:monitor-off"),
+        MojipicScreenButton(hass, entry, bundle, "device_on", "Turn device on", "mdi:power-plug"),
+        MojipicScreenButton(hass, entry, bundle, "device_off", "Turn device off", "mdi:power-plug-off"),
+        MojipicScreenButton(hass, entry, bundle, "clear_screen", "Clear screen", "mdi:eraser"),
+        MojipicScreenButton(hass, entry, bundle, "test_pattern", "Test pattern", "mdi:checkerboard"),
+    ]
+    select = MojipicImageSelect(hass, entry, bundle)
     # Load the option list BEFORE async_add_entities, because populating it
     # used to be what triggered the first async_write_ha_state -- and an
     # entity that has not been added yet has no entity_id, so that raises and
     # takes the whole select platform down with it. The entity disappears from
     # the dashboard entirely, while the other platforms keep working, which
     # makes it look like the entity was deleted rather than broken.
-    await entity.async_refresh_options(write_state=False)
-    async_add_entities([entity])
-    entity._added = True
-    entity.async_write_ha_state()
+    await select.async_refresh_options(write_state=False)
+    async_add_entities(buttons + [select])
+    select._added = True
+    select.async_write_ha_state()
 
     entry.async_on_unload(
         async_track_time_interval(
             hass,
-            entity.async_options_tick,
+            select.async_options_tick,
             # Must be the stdlib datetime.timedelta:
             # async_track_time_interval calls interval.total_seconds(), and
             # homeassistant.util.dt does not export a timedelta.
             timedelta(seconds=SCAN_INTERVAL_SECONDS),
         )
     )
+
+
+class MojipicScreenButton(ButtonEntity):
+    """Buttons for screen/device commands extracted from APK ScreenHandler."""
+
+    _attr_should_poll = False
+
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry, bundle, cmd: str, name: str, icon: str) -> None:
+        super().__init__()
+        self.hass = hass
+        self.entry = entry
+        self.coordinator = bundle["coordinator"]
+        self.manager = bundle["manager"]
+        address = entry.data["address"]
+        self.cmd = cmd
+        self._attr_unique_id = f"{address.lower()}_{cmd}"
+        self._attr_name = f"{entry.data.get(CONF_NAME) or DEFAULT_NAME_PREFIX} {name}"
+        self._attr_icon = icon
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, address.lower())},
+            name=entry.data.get(CONF_NAME) or DEFAULT_NAME_PREFIX,
+            connections={(CONNECTION_BLUETOOTH, address.upper())},
+        )
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.link_state == "configured"
+
+    async def async_press(self) -> None:
+        if self.hass is None:
+            return
+        # Commands verified against decompiled APK (BluetoothDeviceUtilKt.kt)
+        # Screen on/off and device on/off use CHAR_DEVICE_COMMANDS (0000fff6)
+        if self.cmd == "screen_on":
+            await self.coordinator.async_screen_on()
+        elif self.cmd == "screen_off":
+            await self.coordinator.async_screen_off()
+        elif self.cmd == "device_on":
+            await self.coordinator.async_device_on()
+        elif self.cmd == "device_off":
+            await self.coordinator.async_device_off()
+        elif self.cmd == "clear_screen":
+            await self.coordinator.async_clear_screen()
+        elif self.cmd == "test_pattern":
+            await self._async_push_test_pattern()
+
+    async def _async_push_test_pattern(self) -> None:
+        from PIL import Image
+        import io
+        from .image_encode import encode_framebuffer
+        size = 32
+        img = Image.new("RGB", (size, size), "black")
+        pixels = img.load()
+        for y in range(size):
+            for x in range(size):
+                if (x // 4 + y // 4) % 2 == 0:
+                    pixels[x, y] = (255, 255, 255)
+        # Store as a real image entry so the slot is valid and the image
+        # appears in the dropdown. The manager assigns the next free id.
+        import io as io_module
+        raw = io_module.BytesIO()
+        img.save(raw, format="PNG")
+        stored = await self.manager.async_upload(raw.getvalue(), "test_pattern.png")
+        framebuffer = await self.manager.async_framebuffer(stored["id"])
+        result = await self.coordinator.async_display(framebuffer, stored["id"])
+        if result.outcome.ok:
+            await self.manager.async_save()
 
 
 class MojipicImageSelect(SelectEntity):
